@@ -15,15 +15,12 @@ import requests
 # --- Keep-Alive Web Server Setup for Render Free Tier ---
 flask_app = Flask('')
 
-
 @flask_app.route('/')
 def home():
     return "Bot is online and active!"
 
-
 def run_flask():
     flask_app.run(host='0.0.0.0', port=8080)
-
 
 def keep_alive_ping():
     time.sleep(20)
@@ -33,7 +30,6 @@ def keep_alive_ping():
         except Exception:
             pass
         time.sleep(600)  # Pings every 10 minutes
-
 
 # Run web server in background threads
 threading.Thread(target=run_flask, daemon=True).start()
@@ -54,14 +50,14 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 SUCCESSFUL_SPIN = "<a:SuccessfulSpin:1547127487824142346>"
 UNSUCCESSFUL_SPIN = "<a:UnsuccessfulSpin:1547127600693116999>"
 
-# Configuration Storage
+# Configuration & Active Giveaway Storage
 user_damage = {}
 user_warnings = {}
 logging_config = {
     "msg_log_channel": None,
     "media_log_channel": None
 }
-
+active_giveaways = {}  # Stores msg_id -> giveaway data dict
 
 async def log_action(guild: discord.Guild, title: str, description: str, color: discord.Color):
     channel = guild.get_channel(LOG_CHANNEL_ID)
@@ -69,12 +65,10 @@ async def log_action(guild: discord.Guild, title: str, description: str, color: 
         embed = discord.Embed(title=title, description=description, color=color, timestamp=discord.utils.utcnow())
         await channel.send(embed=embed)
 
-
 @bot.event
 async def on_ready():
     await bot.tree.sync()
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-
 
 # --- Event Listeners for Custom Logging ---
 
@@ -83,7 +77,6 @@ async def on_message_delete(message: discord.Message):
     if message.author.bot or not message.guild:
         return
 
-    # Message Deletion Logging
     if logging_config["msg_log_channel"]:
         log_chan = message.guild.get_channel(logging_config["msg_log_channel"])
         if log_chan and message.content:
@@ -95,14 +88,11 @@ async def on_message_delete(message: discord.Message):
             )
             await log_chan.send(embed=embed)
 
-    # Image/GIF Deletion or Posting Log
     if logging_config["media_log_channel"]:
         media_chan = message.guild.get_channel(logging_config["media_log_channel"])
         if media_chan:
-            has_media = any(
-                att.content_type and att.content_type.startswith(('image/', 'video/')) for att in message.attachments)
-            has_gif_link = "tenor.com" in message.content or "giphy.com" in message.content or message.content.endswith(
-                ('.png', '.jpg', '.jpeg', '.gif'))
+            has_media = any(att.content_type and att.content_type.startswith(('image/', 'video/')) for att in message.attachments)
+            has_gif_link = "tenor.com" in message.content or "giphy.com" in message.content or message.content.endswith(('.png', '.jpg', '.jpeg', '.gif'))
 
             if has_media or has_gif_link:
                 embed = discord.Embed(
@@ -115,8 +105,7 @@ async def on_message_delete(message: discord.Message):
                     embed.set_footer(text=f"Attachment Name: {message.attachments[0].filename}")
                 await media_chan.send(embed=embed)
 
-
-# --- Giveaway Modal Form System ---
+# --- Giveaway Management System ---
 
 def parse_duration(duration_str: str) -> int:
     units = {
@@ -132,6 +121,20 @@ def parse_duration(duration_str: str) -> int:
     unit = unit.lower()
     return int(amount) * units.get(unit, 0) if unit in units else None
 
+class GiveawayButton(discord.ui.View):
+    def __init__(self, message_id: int):
+        super().__init__(timeout=None)
+        self.message_id = message_id
+        self.entries = set()
+
+    @discord.ui.button(emoji="🎉", style=discord.ButtonStyle.blurple)
+    async def enter_giveaway(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id in self.entries:
+            self.entries.remove(interaction.user.id)
+            await interaction.response.send_message("You left the giveaway!", ephemeral=True)
+        else:
+            self.entries.add(interaction.user.id)
+            await interaction.response.send_message("You entered the giveaway!", ephemeral=True)
 
 class GiveawayModal(discord.ui.Modal, title="Create a Giveaway"):
     duration_input = discord.ui.TextInput(
@@ -178,55 +181,224 @@ class GiveawayModal(discord.ui.Modal, title="Create a Giveaway"):
             return
 
         prize = self.prize_input.value
-        description = self.description_input.value or "No extra details provided."
+        end_timestamp = int(time.time() + seconds)
 
-        embed = discord.Embed(
-            title=f"🎉 GIVEAWAY: {prize}",
-            description=f"{description}\n\n**Winners:** {winner_count}\n**Duration:** {self.duration_input.value}\n**React with 🎉 to enter!**",
-            color=discord.Color.purple()
-        )
-        embed.set_footer(text=f"Hosted by {interaction.user.display_name}")
+        view = GiveawayButton(0)
+
+        def build_embed():
+            return discord.Embed(
+                title=f"**{prize}**",
+                description=(
+                    f"Ends: <t:{end_timestamp}:R> (<t:{end_timestamp}:f>)\n"
+                    f"Hosted by: {interaction.user.mention} (`@{interaction.user.name}`)\n"
+                    f"Entries: **{len(view.entries)}**\n"
+                    f"Winners: **{winner_count}**"
+                ),
+                color=discord.Color.blue(),
+                timestamp=discord.utils.utcnow()
+            )
 
         await interaction.response.send_message("Starting giveaway...", ephemeral=True)
-        msg = await interaction.channel.send(embed=embed)
-        await msg.add_reaction("🎉")
+        msg = await interaction.channel.send(embed=build_embed(), view=view)
+        view.message_id = msg.id
 
-        await asyncio.sleep(seconds)
+        # Register giveaway into tracking dictionary
+        active_giveaways[msg.id] = {
+            "msg": msg,
+            "channel_id": interaction.channel_id,
+            "prize": prize,
+            "host": interaction.user,
+            "end_timestamp": end_timestamp,
+            "winner_count": winner_count,
+            "view": view,
+            "active": True
+        }
 
-        msg = await interaction.channel.fetch_message(msg.id)
-        reaction = discord.utils.get(msg.reactions, emoji="🎉")
+        # Live counter update loop
+        start_time = time.time()
+        while time.time() - start_time < seconds:
+            await asyncio.sleep(5)
+            if msg.id not in active_giveaways or not active_giveaways[msg.id]["active"]:
+                return  # Terminate loop if ended early or deleted
+            try:
+                await msg.edit(embed=build_embed(), view=view)
+            except discord.HTTPException:
+                break
 
-        users = []
-        if reaction:
-            async for u in reaction.users():
-                if not u.bot:
-                    users.append(u)
+        # Process standard end if still active
+        if msg.id in active_giveaways and active_giveaways[msg.id]["active"]:
+            await finalize_giveaway(msg.id, interaction.guild)
 
-        if not users:
-            await interaction.channel.send(f"Giveaway for **{prize}** ended, but no one entered!")
-        else:
-            winners = random.sample(users, k=min(winner_count, len(users)))
-            winner_mentions = ", ".join([w.mention for w in winners])
+async def finalize_giveaway(message_id: int, guild: discord.Guild):
+    data = active_giveaways.get(message_id)
+    if not data or not data["active"]:
+        return
 
-            end_embed = discord.Embed(
-                title="🎉 Giveaway Ended!",
-                description=f"**Prize:** {prize}\n**Winner(s):** {winner_mentions}",
-                color=discord.Color.green()
-            )
-            await interaction.channel.send(content=f"Congratulations {winner_mentions}!", embed=end_embed)
+    data["active"] = False
+    msg = data["msg"]
+    prize = data["prize"]
+    winner_count = data["winner_count"]
+    view = data["view"]
+    end_timestamp = data["end_timestamp"]
+    host = data["host"]
 
+    winner_users = []
+    for uid in view.entries:
+        u = guild.get_member(uid)
+        if u and not u.bot:
+            winner_users.append(u)
+
+    if not winner_users:
+        ended_embed = discord.Embed(
+            title=f"**{prize}**",
+            description=(
+                f"Ended: <t:{end_timestamp}:f>\n"
+                f"Hosted by: {host.mention} (`@{host.name}`)\n"
+                f"Entries: **0**\n"
+                f"Winners: Could not determine a winner."
+            ),
+            color=discord.Color.blue(),
+            timestamp=discord.utils.utcnow()
+        )
+        try:
+            await msg.edit(embed=ended_embed, view=None)
+        except discord.HTTPException:
+            pass
+        await msg.channel.send(f"Giveaway for **{prize}** ended, but no one entered!")
+    else:
+        winners = random.sample(winner_users, k=min(winner_count, len(winner_users)))
+        winner_mentions = ", ".join([w.mention for w in winners])
+
+        ended_embed = discord.Embed(
+            title=f"**{prize}**",
+            description=(
+                f"Ended: <t:{end_timestamp}:f>\n"
+                f"Hosted by: {host.mention} (`@{host.name}`)\n"
+                f"Entries: **{len(view.entries)}**\n"
+                f"Winners: {winner_mentions}"
+            ),
+            color=discord.Color.blue(),
+            timestamp=discord.utils.utcnow()
+        )
+        try:
+            await msg.edit(embed=ended_embed, view=None)
+        except discord.HTTPException:
+            pass
+        await msg.channel.send(content=f"Congratulations {winner_mentions}! You won **{prize}**!")
+
+# --- Giveaway Control Slash Commands ---
 
 @bot.tree.command(name="gcreate", description="starts a giveaway (interactive)")
 @app_commands.checks.has_permissions(administrator=True)
 async def gcreate(interaction: discord.Interaction):
     await interaction.response.send_modal(GiveawayModal())
 
-
 @bot.tree.command(name="giveaway", description="starts a giveaway (interactive)")
 @app_commands.checks.has_permissions(administrator=True)
 async def giveaway(interaction: discord.Interaction):
     await interaction.response.send_modal(GiveawayModal())
 
+@bot.tree.command(name="gend", description="Manually end an active giveaway immediately")
+@app_commands.checks.has_permissions(administrator=True)
+async def gend(interaction: discord.Interaction, message_id: str):
+    try:
+        msg_id = int(message_id)
+    except ValueError:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Invalid Message ID format.", ephemeral=True)
+        return
+
+    data = active_giveaways.get(msg_id)
+    if not data or not data["active"]:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} No active giveaway found with that Message ID.", ephemeral=True)
+        return
+
+    await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Ending giveaway now...", ephemeral=True)
+    await finalize_giveaway(msg_id, interaction.guild)
+
+@bot.tree.command(name="greroll", description="Reroll winner(s) for a giveaway")
+@app_commands.checks.has_permissions(administrator=True)
+async def greroll(interaction: discord.Interaction, message_id: str):
+    try:
+        msg_id = int(message_id)
+    except ValueError:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Invalid Message ID format.", ephemeral=True)
+        return
+
+    data = active_giveaways.get(msg_id)
+    if not data:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Giveaway data not found for that Message ID.", ephemeral=True)
+        return
+
+    view = data["view"]
+    winner_users = []
+    for uid in view.entries:
+        u = interaction.guild.get_member(uid)
+        if u and not u.bot:
+            winner_users.append(u)
+
+    if not winner_users:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Cannot reroll: No valid entrants found.", ephemeral=True)
+        return
+
+    winner_count = data["winner_count"]
+    new_winners = random.sample(winner_users, k=min(winner_count, len(winner_users)))
+    winner_mentions = ", ".join([w.mention for w in new_winners])
+
+    await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Winner(s) rerolled!", ephemeral=True)
+    await interaction.channel.send(f"🎉 New winner(s) for **{data['prize']}**: {winner_mentions}!")
+
+@bot.tree.command(name="gdelete", description="Delete an active giveaway and remove its message")
+@app_commands.checks.has_permissions(administrator=True)
+async def gdelete(interaction: discord.Interaction, message_id: str):
+    try:
+        msg_id = int(message_id)
+    except ValueError:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Invalid Message ID format.", ephemeral=True)
+        return
+
+    data = active_giveaways.get(msg_id)
+    if not data:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Giveaway not found.", ephemeral=True)
+        return
+
+    data["active"] = False
+    msg = data["msg"]
+    try:
+        await msg.delete()
+    except discord.HTTPException:
+        pass
+
+    active_giveaways.pop(msg_id, None)
+    await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Giveaway deleted successfully.", ephemeral=True)
+
+@bot.tree.command(name="glist", description="List all currently running giveaways")
+@app_commands.checks.has_permissions(administrator=True)
+async def glist(interaction: discord.Interaction):
+    active_list = [g for g in active_giveaways.values() if g["active"]]
+
+    if not active_list:
+        await interaction.response.send_message(f"{SUCCESSFUL_SPIN} There are currently no active giveaways.", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="🎉 Active Giveaways",
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+
+    for g in active_list:
+        embed.add_field(
+            name=f"Prize: {g['prize']}",
+            value=(
+                f"**ID:** `{g['msg'].id}`\n"
+                f"**Channel:** <#{g['channel_id']}>\n"
+                f"**Ends:** <t:{g['end_timestamp']}:R>\n"
+                f"**Entries:** {len(g['view'].entries)}"
+            ),
+            inline=False
+        )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # --- Moderation & Utility Commands ---
 
@@ -236,21 +408,17 @@ async def giveaway(interaction: discord.Interaction):
     app_commands.Choice(name="Message Logs (Deleted Messages)", value="msg"),
     app_commands.Choice(name="Media Logs (Images/GIFs)", value="media")
 ])
-async def setlogchannel(interaction: discord.Interaction, log_type: app_commands.Choice[str],
-                        channel: discord.TextChannel):
+async def setlogchannel(interaction: discord.Interaction, log_type: app_commands.Choice[str], channel: discord.TextChannel):
     if log_type.value == "msg":
         logging_config["msg_log_channel"] = channel.id
-        await interaction.response.send_message(
-            f"{SUCCESSFUL_SPIN} Deleted message logging channel set to {channel.mention}.")
+        await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Deleted message logging channel set to {channel.mention}.")
     elif log_type.value == "media":
         logging_config["media_log_channel"] = channel.id
         await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Media logging channel set to {channel.mention}.")
 
-
 @bot.tree.command(name="embed", description="Create and send a custom embed")
 @app_commands.checks.has_permissions(manage_messages=True)
-async def embed(interaction: discord.Interaction, title: str, description: str, color_hex: str = "3498db",
-                image_url: str = None):
+async def embed(interaction: discord.Interaction, title: str, description: str, color_hex: str = "3498db", image_url: str = None):
     try:
         color_int = int(color_hex.lstrip('#'), 16)
     except ValueError:
@@ -262,7 +430,6 @@ async def embed(interaction: discord.Interaction, title: str, description: str, 
 
     await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Embed created!", ephemeral=True)
     await interaction.channel.send(embed=embed_obj)
-
 
 @bot.tree.command(name="poll", description="Create a simple reaction poll")
 @app_commands.checks.has_permissions(manage_messages=True)
@@ -280,11 +447,9 @@ async def poll(interaction: discord.Interaction, question: str, option1: str, op
     if option3:
         await poll_msg.add_reaction("3️⃣")
 
-
 @bot.tree.command(name="warn", description="Warn a user and apply damage points")
 @app_commands.checks.has_permissions(kick_members=True)
-async def warn(interaction: discord.Interaction, member: discord.Member, points: int,
-               reason: str = "No reason provided"):
+async def warn(interaction: discord.Interaction, member: discord.Member, points: int, reason: str = "No reason provided"):
     if member.bot:
         await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot warn bots.", ephemeral=True)
         return
@@ -326,7 +491,6 @@ async def warn(interaction: discord.Interaction, member: discord.Member, points:
             discord.Color.orange()
         )
 
-
 @bot.tree.command(name="warnings", description="View warnings and damage for a user")
 async def warnings(interaction: discord.Interaction, member: discord.Member):
     total_points = user_damage.get(member.id, 0)
@@ -351,7 +515,6 @@ async def warnings(interaction: discord.Interaction, member: discord.Member):
 
     await interaction.response.send_message(embed=embed)
 
-
 @bot.tree.command(name="clearwarnings", description="Reset warnings and damage points for a user")
 @app_commands.checks.has_permissions(administrator=True)
 async def clearwarnings(interaction: discord.Interaction, member: discord.Member):
@@ -366,7 +529,6 @@ async def clearwarnings(interaction: discord.Interaction, member: discord.Member
         f"**User:** {member.mention}\n**Cleared By:** {interaction.user.mention}",
         discord.Color.green()
     )
-
 
 @bot.tree.command(name="addemote", description="Add an external emoji to the server")
 @app_commands.checks.has_permissions(manage_emojis=True)
@@ -384,6 +546,5 @@ async def addemote(interaction: discord.Interaction, name: str, url: str):
         await interaction.followup.send(f"{SUCCESSFUL_SPIN} Added emoji {new_emoji} (`:{name}:`)!")
     except discord.HTTPException as e:
         await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Failed to add emoji: {e}")
-
 
 bot.run(TOKEN)
