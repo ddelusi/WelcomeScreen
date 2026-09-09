@@ -680,3 +680,4 @@ async def addemote(interaction: discord.Interaction, name: str, url: str):
         await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Failed to add emoji: {e}")
 
 bot.run(TOKEN)
+# build trigger
