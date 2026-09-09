@@ -129,12 +129,27 @@ class GiveawayButton(discord.ui.View):
 
     @discord.ui.button(emoji="🎉", style=discord.ButtonStyle.blurple)
     async def enter_giveaway(self, interaction: discord.Interaction, button: discord.ui.Button):
+        giveaway_data = active_giveaways.get(self.message_id)
+        prize_name = giveaway_data["prize"] if giveaway_data else "the giveaway"
+
         if interaction.user.id in self.entries:
             self.entries.remove(interaction.user.id)
             await interaction.response.send_message("You left the giveaway!", ephemeral=True)
         else:
             self.entries.add(interaction.user.id)
             await interaction.response.send_message("You entered the giveaway!", ephemeral=True)
+
+            # Send DM to user confirming entry
+            try:
+                dm_embed = discord.Embed(
+                    title="🎉 Giveaway Entry Confirmed!",
+                    description=f"You have successfully entered the giveaway for **{prize_name}** in **{interaction.guild.name}**!",
+                    color=discord.Color.green(),
+                    timestamp=discord.utils.utcnow()
+                )
+                await interaction.user.send(embed=dm_embed)
+            except discord.Forbidden:
+                pass  # Ignore if user has DMs closed
 
 class GiveawayModal(discord.ui.Modal, title="Create a Giveaway"):
     duration_input = discord.ui.TextInput(
@@ -288,19 +303,14 @@ async def finalize_giveaway(message_id: int, guild: discord.Guild):
 
 # --- Giveaway Control Slash Commands ---
 
-@bot.tree.command(name="gcreate", description="starts a giveaway (interactive)")
-@app_commands.checks.has_permissions(administrator=True)
-async def gcreate(interaction: discord.Interaction):
-    await interaction.response.send_modal(GiveawayModal())
-
 @bot.tree.command(name="giveaway", description="starts a giveaway (interactive)")
 @app_commands.checks.has_permissions(administrator=True)
 async def giveaway(interaction: discord.Interaction):
     await interaction.response.send_modal(GiveawayModal())
 
-@bot.tree.command(name="gend", description="Manually end an active giveaway immediately")
+@bot.tree.command(name="giveawayend", description="Manually end an active giveaway immediately")
 @app_commands.checks.has_permissions(administrator=True)
-async def gend(interaction: discord.Interaction, message_id: str):
+async def giveawayend(interaction: discord.Interaction, message_id: str):
     try:
         msg_id = int(message_id)
     except ValueError:
@@ -315,9 +325,9 @@ async def gend(interaction: discord.Interaction, message_id: str):
     await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Ending giveaway now...", ephemeral=True)
     await finalize_giveaway(msg_id, interaction.guild)
 
-@bot.tree.command(name="greroll", description="Reroll winner(s) for a giveaway")
+@bot.tree.command(name="giveawayreroll", description="Reroll winner(s) for a giveaway")
 @app_commands.checks.has_permissions(administrator=True)
-async def greroll(interaction: discord.Interaction, message_id: str):
+async def giveawayreroll(interaction: discord.Interaction, message_id: str):
     try:
         msg_id = int(message_id)
     except ValueError:
@@ -347,9 +357,9 @@ async def greroll(interaction: discord.Interaction, message_id: str):
     await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Winner(s) rerolled!", ephemeral=True)
     await interaction.channel.send(f"🎉 New winner(s) for **{data['prize']}**: {winner_mentions}!")
 
-@bot.tree.command(name="gdelete", description="Delete an active giveaway and remove its message")
+@bot.tree.command(name="giveawaydelete", description="Delete an active giveaway and remove its message")
 @app_commands.checks.has_permissions(administrator=True)
-async def gdelete(interaction: discord.Interaction, message_id: str):
+async def giveawaydelete(interaction: discord.Interaction, message_id: str):
     try:
         msg_id = int(message_id)
     except ValueError:
@@ -371,9 +381,9 @@ async def gdelete(interaction: discord.Interaction, message_id: str):
     active_giveaways.pop(msg_id, None)
     await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Giveaway deleted successfully.", ephemeral=True)
 
-@bot.tree.command(name="glist", description="List all currently running giveaways")
+@bot.tree.command(name="giveawaylist", description="List all currently running giveaways")
 @app_commands.checks.has_permissions(administrator=True)
-async def glist(interaction: discord.Interaction):
+async def giveawaylist(interaction: discord.Interaction):
     active_list = [g for g in active_giveaways.values() if g["active"]]
 
     if not active_list:
