@@ -15,12 +15,15 @@ import requests
 # --- Keep-Alive Web Server Setup for Render Free Tier ---
 flask_app = Flask('')
 
+
 @flask_app.route('/')
 def home():
     return "Bot is online and active!"
 
+
 def run_flask():
     flask_app.run(host='0.0.0.0', port=8080)
+
 
 def keep_alive_ping():
     time.sleep(20)
@@ -30,6 +33,7 @@ def keep_alive_ping():
         except Exception:
             pass
         time.sleep(600)  # Pings every 10 minutes
+
 
 # Run web server in background threads
 threading.Thread(target=run_flask, daemon=True).start()
@@ -51,9 +55,10 @@ UNSUCCESSFUL_SPIN = "<a:UnsuccessfulSpin:1547127600693116999>"
 
 # Server-Specific Storage: guild_id -> config/data dicts
 server_configs = {}
-user_damage = {}      # (guild_id, user_id) -> total damage points
-user_warnings = {}    # (guild_id, user_id) -> list of warning dicts
-active_giveaways = {} # message_id -> giveaway data dict
+user_damage = {}  # (guild_id, user_id) -> total damage points
+user_warnings = {}  # (guild_id, user_id) -> list of warning dicts
+active_giveaways = {}  # message_id -> giveaway data dict
+
 
 def get_server_config(guild_id: int) -> dict:
     if guild_id not in server_configs:
@@ -64,6 +69,7 @@ def get_server_config(guild_id: int) -> dict:
         }
     return server_configs[guild_id]
 
+
 async def log_action(guild: discord.Guild, title: str, description: str, color: discord.Color):
     config = get_server_config(guild.id)
     log_chan_id = config.get("log_channel")
@@ -73,11 +79,13 @@ async def log_action(guild: discord.Guild, title: str, description: str, color: 
             embed = discord.Embed(title=title, description=description, color=color, timestamp=discord.utils.utcnow())
             await channel.send(embed=embed)
 
+
 @bot.event
 async def on_ready():
     # Sync slash commands globally across all joined guilds
     await bot.tree.sync()
     print(f"Logged in as {bot.user} (ID: {bot.user.id}) - Active across {len(bot.guilds)} servers")
+
 
 # --- Event Listeners for Dynamic Per-Server Logging & Unban Resets ---
 
@@ -93,6 +101,7 @@ async def on_member_unban(guild: discord.Guild, user: discord.User):
             f"**User:** {user.mention} ({user.id})\n**Reason:** Automatically reset all damage points and warnings upon being unbanned.",
             discord.Color.blue()
         )
+
 
 @bot.event
 async def on_message_delete(message: discord.Message):
@@ -115,8 +124,10 @@ async def on_message_delete(message: discord.Message):
     if config["media_log_channel"]:
         media_chan = message.guild.get_channel(config["media_log_channel"])
         if media_chan:
-            has_media = any(att.content_type and att.content_type.startswith(('image/', 'video/')) for att in message.attachments)
-            has_gif_link = "tenor.com" in message.content or "giphy.com" in message.content or message.content.endswith(('.png', '.jpg', '.jpeg', '.gif'))
+            has_media = any(
+                att.content_type and att.content_type.startswith(('image/', 'video/')) for att in message.attachments)
+            has_gif_link = "tenor.com" in message.content or "giphy.com" in message.content or message.content.endswith(
+                ('.png', '.jpg', '.jpeg', '.gif'))
 
             if has_media or has_gif_link:
                 embed = discord.Embed(
@@ -128,6 +139,7 @@ async def on_message_delete(message: discord.Message):
                 if message.attachments:
                     embed.set_footer(text=f"Attachment Name: {message.attachments[0].filename}")
                 await media_chan.send(embed=embed)
+
 
 # --- Speak / Say Slash Commands ---
 
@@ -147,6 +159,7 @@ async def say(interaction: discord.Interaction, message: str, channel: discord.T
             ephemeral=True
         )
 
+
 @bot.tree.command(name="speak", description="Make the bot say a message in the current channel")
 @app_commands.checks.has_permissions(manage_messages=True)
 async def speak(interaction: discord.Interaction, message: str):
@@ -161,6 +174,7 @@ async def speak(interaction: discord.Interaction, message: str):
             f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages here.",
             ephemeral=True
         )
+
 
 # --- Embed Builder Modal & Commands ---
 
@@ -231,10 +245,12 @@ class EmbedModal(discord.ui.Modal, title="Create Custom Embed"):
                 ephemeral=True
             )
 
+
 @bot.tree.command(name="embed", description="Opens the form to build and send a custom embed")
 @app_commands.checks.has_permissions(manage_messages=True)
 async def embed(interaction: discord.Interaction):
     await interaction.response.send_modal(EmbedModal())
+
 
 # --- Giveaway Management System ---
 
@@ -251,6 +267,7 @@ def parse_duration(duration_str: str) -> int:
     amount, unit = match.groups()
     unit = unit.lower()
     return int(amount) * units.get(unit, 0) if unit in units else None
+
 
 class GiveawayButton(discord.ui.View):
     def __init__(self, message_id: int):
@@ -280,6 +297,7 @@ class GiveawayButton(discord.ui.View):
                 await interaction.user.send(embed=dm_embed)
             except discord.Forbidden:
                 pass
+
 
 class GiveawayModal(discord.ui.Modal, title="Create a Giveaway"):
     duration_input = discord.ui.TextInput(
@@ -372,6 +390,7 @@ class GiveawayModal(discord.ui.Modal, title="Create a Giveaway"):
         if msg.id in active_giveaways and active_giveaways[msg.id]["active"]:
             await finalize_giveaway(msg.id, interaction.guild)
 
+
 async def finalize_giveaway(message_id: int, guild: discord.Guild):
     data = active_giveaways.get(message_id)
     if not data or not data["active"]:
@@ -429,12 +448,14 @@ async def finalize_giveaway(message_id: int, guild: discord.Guild):
             pass
         await msg.channel.send(content=f"Congratulations {winner_mentions}! You won **{prize}**!")
 
+
 # --- Giveaway Control Slash Commands ---
 
 @bot.tree.command(name="giveaway", description="starts a giveaway (interactive)")
 @app_commands.checks.has_permissions(administrator=True)
 async def giveaway(interaction: discord.Interaction):
     await interaction.response.send_modal(GiveawayModal())
+
 
 @bot.tree.command(name="giveawayend", description="Manually end an active giveaway immediately")
 @app_commands.checks.has_permissions(administrator=True)
@@ -447,11 +468,13 @@ async def giveawayend(interaction: discord.Interaction, message_id: str):
 
     data = active_giveaways.get(msg_id)
     if not data or not data["active"] or data.get("guild_id") != interaction.guild_id:
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} No active giveaway found with that Message ID in this server.", ephemeral=True)
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} No active giveaway found with that Message ID in this server.", ephemeral=True)
         return
 
     await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Ending giveaway now...", ephemeral=True)
     await finalize_giveaway(msg_id, interaction.guild)
+
 
 @bot.tree.command(name="giveawayreroll", description="Reroll winner(s) for a giveaway")
 @app_commands.checks.has_permissions(administrator=True)
@@ -464,7 +487,8 @@ async def giveawayreroll(interaction: discord.Interaction, message_id: str):
 
     data = active_giveaways.get(msg_id)
     if not data or data.get("guild_id") != interaction.guild_id:
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Giveaway data not found for that Message ID in this server.", ephemeral=True)
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} Giveaway data not found for that Message ID in this server.", ephemeral=True)
         return
 
     view = data["view"]
@@ -475,7 +499,8 @@ async def giveawayreroll(interaction: discord.Interaction, message_id: str):
             winner_users.append(u)
 
     if not winner_users:
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Cannot reroll: No valid entrants found.", ephemeral=True)
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Cannot reroll: No valid entrants found.",
+                                                ephemeral=True)
         return
 
     winner_count = data["winner_count"]
@@ -484,6 +509,7 @@ async def giveawayreroll(interaction: discord.Interaction, message_id: str):
 
     await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Winner(s) rerolled!", ephemeral=True)
     await interaction.channel.send(f"🎉 New winner(s) for **{data['prize']}**: {winner_mentions}!")
+
 
 @bot.tree.command(name="giveawaydelete", description="Delete an active giveaway and remove its message")
 @app_commands.checks.has_permissions(administrator=True)
@@ -496,7 +522,8 @@ async def giveawaydelete(interaction: discord.Interaction, message_id: str):
 
     data = active_giveaways.get(msg_id)
     if not data or data.get("guild_id") != interaction.guild_id:
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Giveaway not found in this server.", ephemeral=True)
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Giveaway not found in this server.",
+                                                ephemeral=True)
         return
 
     data["active"] = False
@@ -509,13 +536,15 @@ async def giveawaydelete(interaction: discord.Interaction, message_id: str):
     active_giveaways.pop(msg_id, None)
     await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Giveaway deleted successfully.", ephemeral=True)
 
+
 @bot.tree.command(name="giveawaylist", description="List all currently running giveaways in this server")
 @app_commands.checks.has_permissions(administrator=True)
 async def giveawaylist(interaction: discord.Interaction):
     active_list = [g for g in active_giveaways.values() if g["active"] and g.get("guild_id") == interaction.guild_id]
 
     if not active_list:
-        await interaction.response.send_message(f"{SUCCESSFUL_SPIN} There are currently no active giveaways in this server.", ephemeral=True)
+        await interaction.response.send_message(
+            f"{SUCCESSFUL_SPIN} There are currently no active giveaways in this server.", ephemeral=True)
         return
 
     embed = discord.Embed(
@@ -538,6 +567,7 @@ async def giveawaylist(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+
 # --- Moderation & Utility Commands ---
 
 @bot.tree.command(name="setlogchannel", description="Set dynamic logging channels for messages, media, or general logs")
@@ -547,7 +577,8 @@ async def giveawaylist(interaction: discord.Interaction):
     app_commands.Choice(name="Message Logs (Deleted Messages)", value="msg"),
     app_commands.Choice(name="Media Logs (Images/GIFs)", value="media")
 ])
-async def setlogchannel(interaction: discord.Interaction, log_type: app_commands.Choice[str], channel: discord.TextChannel):
+async def setlogchannel(interaction: discord.Interaction, log_type: app_commands.Choice[str],
+                        channel: discord.TextChannel):
     config = get_server_config(interaction.guild_id)
 
     if log_type.value == "general":
@@ -555,10 +586,12 @@ async def setlogchannel(interaction: discord.Interaction, log_type: app_commands
         await interaction.response.send_message(f"{SUCCESSFUL_SPIN} General log channel set to {channel.mention}.")
     elif log_type.value == "msg":
         config["msg_log_channel"] = channel.id
-        await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Deleted message logging channel set to {channel.mention}.")
+        await interaction.response.send_message(
+            f"{SUCCESSFUL_SPIN} Deleted message logging channel set to {channel.mention}.")
     elif log_type.value == "media":
         config["media_log_channel"] = channel.id
         await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Media logging channel set to {channel.mention}.")
+
 
 @bot.tree.command(name="poll", description="Create a simple reaction poll")
 @app_commands.checks.has_permissions(manage_messages=True)
@@ -576,9 +609,70 @@ async def poll(interaction: discord.Interaction, question: str, option1: str, op
     if option3:
         await poll_msg.add_reaction("3️⃣")
 
+
+# --- Damage & Warning Commands ---
+
+@bot.tree.command(name="damage", description="Apply or remove damage points for a user")
+@app_commands.checks.has_permissions(kick_members=True)
+async def damage(interaction: discord.Interaction, member: discord.Member, points: int,
+                 reason: str = "No reason provided"):
+    if member.bot:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot apply damage to bots.", ephemeral=True)
+        return
+
+    key = (interaction.guild_id, member.id)
+    user_damage[key] = max(0, user_damage.get(key, 0) + points)
+    current_damage = user_damage[key]
+
+    if current_damage >= 25:
+        try:
+            await member.ban(reason=f"Reached 25+ damage points (Auto-ban). Last update: {reason}")
+            await interaction.response.send_message(
+                f"{SUCCESSFUL_SPIN} **{member.display_name}** reached **{current_damage}** damage points and was **automatically banned**."
+            )
+            await log_action(
+                interaction.guild,
+                "Auto-Ban Executed",
+                f"**User:** {member.mention} ({member.id})\n**Reason:** Accumulated {current_damage} damage points.",
+                discord.Color.red()
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                f"{UNSUCCESSFUL_SPIN} **{member.display_name}** reached **{current_damage}** damage points, but I do not have permission to ban them.",
+                ephemeral=True
+            )
+    else:
+        action_text = "Added" if points >= 0 else "Removed"
+        await interaction.response.send_message(
+            f"{SUCCESSFUL_SPIN} {action_text} **{abs(points)}** damage point(s) for **{member.display_name}**. Total Damage: **{current_damage}/25**."
+        )
+        await log_action(
+            interaction.guild,
+            "Damage Points Updated",
+            f"**User:** {member.mention}\n**Point Change:** {points:+d}\n**Total Points:** {current_damage}/25\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
+            discord.Color.orange() if points > 0 else discord.Color.green()
+        )
+
+
+@bot.tree.command(name="checkdamage", description="Check the current damage points of a user")
+async def checkdamage(interaction: discord.Interaction, member: discord.Member):
+    key = (interaction.guild_id, member.id)
+    pts = user_damage.get(key, 0)
+
+    embed = discord.Embed(
+        title=f"Damage Report — {member.display_name}",
+        description=f"**Current Damage:** {pts}/25",
+        color=discord.Color.red() if pts >= 15 else discord.Color.blue()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+
+    await interaction.response.send_message(embed=embed)
+
+
 @bot.tree.command(name="warn", description="Warn a user and apply damage points")
 @app_commands.checks.has_permissions(kick_members=True)
-async def warn(interaction: discord.Interaction, member: discord.Member, points: int, reason: str = "No reason provided"):
+async def warn(interaction: discord.Interaction, member: discord.Member, points: int,
+               reason: str = "No reason provided"):
     if member.bot:
         await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot warn bots.", ephemeral=True)
         return
@@ -621,6 +715,7 @@ async def warn(interaction: discord.Interaction, member: discord.Member, points:
             discord.Color.orange()
         )
 
+
 @bot.tree.command(name="warnings", description="View warnings and damage for a user")
 async def warnings(interaction: discord.Interaction, member: discord.Member):
     key = (interaction.guild_id, member.id)
@@ -646,6 +741,7 @@ async def warnings(interaction: discord.Interaction, member: discord.Member):
 
     await interaction.response.send_message(embed=embed)
 
+
 @bot.tree.command(name="clearwarnings", description="Reset warnings and damage points for a user")
 @app_commands.checks.has_permissions(administrator=True)
 async def clearwarnings(interaction: discord.Interaction, member: discord.Member):
@@ -661,6 +757,7 @@ async def clearwarnings(interaction: discord.Interaction, member: discord.Member
         f"**User:** {member.mention}\n**Cleared By:** {interaction.user.mention}",
         discord.Color.green()
     )
+
 
 @bot.tree.command(name="addemote", description="Add an external emoji to the server")
 @app_commands.checks.has_permissions(manage_emojis=True)
@@ -679,5 +776,5 @@ async def addemote(interaction: discord.Interaction, name: str, url: str):
     except discord.HTTPException as e:
         await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Failed to add emoji: {e}")
 
+
 bot.run(TOKEN)
-# build trigger
