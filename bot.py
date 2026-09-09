@@ -82,9 +82,9 @@ async def log_action(guild: discord.Guild, title: str, description: str, color: 
 
 @bot.event
 async def on_ready():
-    # Sync slash commands globally across all joined guilds
+    # Syncs slash commands globally across all servers
     await bot.tree.sync()
-    print(f"Logged in as {bot.user} (ID: {bot.user.id}) - Active across {len(bot.guilds)} servers")
+    print(f"Logged in as {bot.user} (ID: {bot.user.id}) - Globally synced commands across all servers")
 
 
 # --- Event Listeners for Dynamic Per-Server Logging & Unban Resets ---
