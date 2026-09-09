@@ -183,14 +183,14 @@ async def apply_damage_and_punish(guild: discord.Guild, member: discord.Member, 
             duration_str = ""
 
             if current_damage >= 14:
-                mute_duration = timedelta(hours=24)
-                duration_str = "24 Hours"
+                mute_duration = timedelta(days=7)
+                duration_str = "7 Days"
             elif current_damage >= 7:
-                mute_duration = timedelta(hours=12)
-                duration_str = "12 Hours"
+                mute_duration = timedelta(days=7)
+                duration_str = "7 Days"
             elif current_damage >= 3:
-                mute_duration = timedelta(hours=1)
-                duration_str = "1 Hour"
+                mute_duration = timedelta(days=3)
+                duration_str = "3 Days"
 
             if mute_duration and points > 0:
                 try:
