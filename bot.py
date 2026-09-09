@@ -1,5 +1,6 @@
 import os
 import io
+import json
 import threading
 import time
 import asyncio
@@ -64,11 +65,38 @@ bot = commands.Bot(command_prefix=get_prefix, intents=intents)
 SUCCESSFUL_SPIN = "<a:SuccessfulSpin:1547127487824142346>"
 UNSUCCESSFUL_SPIN = "<a:UnsuccessfulSpin:1547127600693116999>"
 
-# Server-Specific Storage: guild_id -> config/data dicts
+# Server-Specific Storage
 server_configs = {}
 user_damage = {}  # (guild_id, user_id) -> total damage points
 user_warnings = {}  # (guild_id, user_id) -> list of warning dicts
 active_giveaways = {}  # message_id -> giveaway data dict
+
+# --- Persistent JSON Storage for Damage & Warnings ---
+DATA_FILE = "damage_data.json"
+
+
+def save_data():
+    data = {
+        "damage": {f"{g}_{u}": v for (g, u), v in user_damage.items()},
+        "warnings": {f"{g}_{u}": v for (g, u), v in user_warnings.items()}
+    }
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+
+def load_data():
+    global user_damage, user_warnings
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r") as f:
+                data = json.load(f)
+                user_damage = {tuple(map(int, k.split("_"))): v for k, v in data.get("damage", {}).items()}
+                user_warnings = {tuple(map(int, k.split("_"))): v for k, v in data.get("warnings", {}).items()}
+        except Exception as e:
+            print(f"Error loading damage data: {e}")
+
+
+load_data()
 
 
 def get_server_config(guild_id: int) -> dict:
@@ -104,6 +132,7 @@ async def apply_damage_and_punish(guild: discord.Guild, member: discord.Member, 
     key = (guild.id, member.id)
     user_damage[key] = max(0, user_damage.get(key, 0) + points)
     current_damage = user_damage[key]
+    save_data()
 
     punishment_text = "No additional punishment applied."
 
@@ -120,7 +149,7 @@ async def apply_damage_and_punish(guild: discord.Guild, member: discord.Member, 
 
     # 2. Check for Auto-Mutes (Timeouts) & Unmutes
     else:
-        # If removing damage drops points below 3, lift active timeout if present
+        # If points drop below 3 via removedamage, lift active timeout if present
         if points < 0 and current_damage < 3:
             if member.timed_out_until:
                 try:
@@ -158,7 +187,7 @@ async def apply_damage_and_punish(guild: discord.Guild, member: discord.Member, 
     return current_damage, punishment_text
 
 
-# --- Event Listeners for Dynamic Per-Server Logging & Unban Resets ---
+# --- Event Listeners ---
 
 @bot.event
 async def on_member_unban(guild: discord.Guild, user: discord.User):
@@ -166,6 +195,7 @@ async def on_member_unban(guild: discord.Guild, user: discord.User):
     if key in user_damage or key in user_warnings:
         user_damage.pop(key, None)
         user_warnings.pop(key, None)
+        save_data()
         await log_action(
             guild,
             "Damage Points Reset",
@@ -181,7 +211,6 @@ async def on_message_delete(message: discord.Message):
 
     config = get_server_config(message.guild.id)
 
-    # --- Deleted Message Text Logging ---
     if config["msg_log_channel"]:
         log_chan = message.guild.get_channel(config["msg_log_channel"])
         if log_chan and message.content:
@@ -193,7 +222,6 @@ async def on_message_delete(message: discord.Message):
             )
             await log_chan.send(embed=embed)
 
-    # --- Deleted Media Logging ---
     if config["media_log_channel"]:
         media_chan = message.guild.get_channel(config["media_log_channel"])
         if media_chan:
@@ -201,12 +229,10 @@ async def on_message_delete(message: discord.Message):
                 domain in message.content for domain in ["tenor.com", "giphy.com"]) or message.content.endswith(
                 ('.png', '.jpg', '.jpeg', '.gif'))
 
-            # Handles uploaded file attachments (images/videos)
             if message.attachments:
                 for attachment in message.attachments:
                     if attachment.content_type and attachment.content_type.startswith(('image/', 'video/')):
                         try:
-                            # Re-download the file bytes directly before Discord clears it
                             file_bytes = await attachment.read()
                             file_to_send = discord.File(fp=io.BytesIO(file_bytes), filename=attachment.filename)
 
@@ -220,7 +246,6 @@ async def on_message_delete(message: discord.Message):
                         except Exception:
                             pass
 
-            # Handles GIF links or external image URLs typed in chat
             elif has_gif_link:
                 embed = discord.Embed(
                     title="Media Link Deleted",
@@ -294,7 +319,7 @@ async def speak_prefix(ctx, *, message: str):
         await ctx.send(f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages here.")
 
 
-# --- Embed Builder Modal & Commands ---
+# --- Embed Builder ---
 
 class EmbedModal(discord.ui.Modal, title="Create Custom Embed"):
     channel_mention_input = discord.ui.TextInput(
@@ -367,7 +392,7 @@ async def embed(interaction: discord.Interaction):
     await interaction.response.send_modal(EmbedModal())
 
 
-# --- Giveaway Management System ---
+# --- Giveaway System ---
 
 def parse_duration(duration_str: str) -> int:
     units = {
@@ -534,7 +559,7 @@ async def giveaway(interaction: discord.Interaction):
     await interaction.response.send_modal(GiveawayModal())
 
 
-# --- Moderation & Utility Commands ---
+# --- Logging Channel Configuration ---
 
 @bot.tree.command(name="setlogchannel", description="Set dynamic logging channels for messages, media, or general logs")
 @app_commands.checks.has_permissions(administrator=True)
@@ -550,7 +575,7 @@ async def setlogchannel(interaction: discord.Interaction, log_type: app_commands
     await interaction.response.send_message(f"{SUCCESSFUL_SPIN} {log_type.name} set to {channel.mention}.")
 
 
-# --- Damage Commands ---
+# --- Add Damage Commands ---
 
 @bot.tree.command(name="damage", description="Apply damage points to a user")
 @app_commands.checks.has_permissions(kick_members=True)
@@ -631,6 +656,8 @@ async def removedamage_prefix(ctx, member: discord.Member, points: int, *, reaso
     )
     await ctx.send(response_msg)
 
+
+# --- Damage Query & Warning Commands ---
 
 @bot.tree.command(name="checkdamage", description="Check the current damage points of a user")
 async def checkdamage(interaction: discord.Interaction, member: discord.Member):
@@ -748,6 +775,7 @@ async def clearwarnings(interaction: discord.Interaction, member: discord.Member
     key = (interaction.guild_id, member.id)
     user_damage.pop(key, None)
     user_warnings.pop(key, None)
+    save_data()
 
     if member.timed_out_until:
         try:
@@ -767,6 +795,7 @@ async def clearwarnings_prefix(ctx, member: discord.Member):
     key = (ctx.guild.id, member.id)
     user_damage.pop(key, None)
     user_warnings.pop(key, None)
+    save_data()
 
     if member.timed_out_until:
         try:
