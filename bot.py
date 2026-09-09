@@ -5,6 +5,7 @@ import time
 import asyncio
 import random
 import re
+from datetime import timedelta
 import aiohttp
 import discord
 from discord import app_commands
@@ -94,6 +95,67 @@ async def log_action(guild: discord.Guild, title: str, description: str, color: 
 async def on_ready():
     await bot.tree.sync()
     print(f"Logged in as {bot.user} (ID: {bot.user.id}) - Globally synced commands across all servers")
+
+
+# --- Helper Function for Automated Damage & Punishment Thresholds ---
+
+async def apply_damage_and_punish(guild: discord.Guild, member: discord.Member, points: int, reason: str,
+                                  moderator: discord.User):
+    key = (guild.id, member.id)
+    user_damage[key] = max(0, user_damage.get(key, 0) + points)
+    current_damage = user_damage[key]
+
+    punishment_text = "No additional punishment applied."
+
+    # 1. Check for Auto-Ban (25+ points)
+    if current_damage >= 25:
+        try:
+            await member.ban(reason=f"Reached {current_damage} damage points (Auto-ban). Last reason: {reason}")
+            punishment_text = "🔨 **AUTOMATICALLY BANNED** (Reached 25+ damage points)"
+            await log_action(guild, "Auto-Ban Executed",
+                             f"**User:** {member.mention} ({member.id})\n**Reason:** Accumulated {current_damage} damage points.",
+                             discord.Color.red())
+        except discord.Forbidden:
+            punishment_text = "⚠️ Reached 25+ points, but I lack permissions to ban this member."
+
+    # 2. Check for Auto-Mutes (Timeouts) & Unmutes
+    else:
+        # If removing damage drops points below 3, lift active timeout if present
+        if points < 0 and current_damage < 3:
+            if member.timed_out_until:
+                try:
+                    await member.timeout(None, reason=f"Damage reduced to {current_damage} by {moderator.display_name}")
+                    punishment_text = "🔊 **TIMEOUT REMOVED** (Damage reduced below 3 points)"
+                except discord.Forbidden:
+                    punishment_text = "⚠️ Damage lowered, but I lack permission to remove active timeout."
+        else:
+            mute_duration = None
+            duration_str = ""
+
+            if current_damage >= 14:
+                mute_duration = timedelta(hours=24)
+                duration_str = "24 Hours"
+            elif current_damage >= 7:
+                mute_duration = timedelta(hours=12)
+                duration_str = "12 Hours"
+            elif current_damage >= 3:
+                mute_duration = timedelta(hours=1)
+                duration_str = "1 Hour"
+
+            if mute_duration and points > 0:
+                try:
+                    await member.timeout(mute_duration, reason=f"Accumulated {current_damage} damage points.")
+                    punishment_text = f"🔇 **AUTOMATICALLY MUTED** for **{duration_str}** (Reached {current_damage} points)"
+                    await log_action(
+                        guild,
+                        "Auto-Mute Executed",
+                        f"**User:** {member.mention}\n**Mute Duration:** {duration_str}\n**Total Points:** {current_damage}/25",
+                        discord.Color.gold()
+                    )
+                except discord.Forbidden:
+                    punishment_text = f"⚠️ Reached {current_damage} points for a {duration_str} mute, but I lack permission to timeout this member."
+
+    return current_damage, punishment_text
 
 
 # --- Event Listeners for Dynamic Per-Server Logging & Unban Resets ---
@@ -488,70 +550,86 @@ async def setlogchannel(interaction: discord.Interaction, log_type: app_commands
     await interaction.response.send_message(f"{SUCCESSFUL_SPIN} {log_type.name} set to {channel.mention}.")
 
 
-# --- Damage & Warning Slash + Prefix Commands ---
+# --- Damage Commands ---
 
-@bot.tree.command(name="damage", description="Apply or remove damage points for a user")
+@bot.tree.command(name="damage", description="Apply damage points to a user")
 @app_commands.checks.has_permissions(kick_members=True)
 async def damage(interaction: discord.Interaction, member: discord.Member, points: int,
                  reason: str = "No reason provided"):
     if member.bot:
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot apply damage to bots.", ephemeral=True)
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot modify damage for bots.",
+                                                ephemeral=True)
         return
 
-    key = (interaction.guild_id, member.id)
-    user_damage[key] = max(0, user_damage.get(key, 0) + points)
-    current_damage = user_damage[key]
+    pts_to_add = abs(points)
+    current_damage, punishment = await apply_damage_and_punish(interaction.guild, member, pts_to_add, reason,
+                                                               interaction.user)
 
-    if current_damage >= 25:
-        try:
-            await member.ban(reason=f"Reached 25+ damage points (Auto-ban). Last update: {reason}")
-            await interaction.response.send_message(
-                f"{SUCCESSFUL_SPIN} **{member.display_name}** reached **{current_damage}** damage points and was **automatically banned**.")
-            await log_action(interaction.guild, "Auto-Ban Executed",
-                             f"**User:** {member.mention} ({member.id})\n**Reason:** Accumulated {current_damage} damage points.",
-                             discord.Color.red())
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                f"{UNSUCCESSFUL_SPIN} **{member.display_name}** reached **{current_damage}** damage points, but I do not have permission to ban them.",
-                ephemeral=True)
-    else:
-        action_text = "Added" if points >= 0 else "Removed"
-        await interaction.response.send_message(
-            f"{SUCCESSFUL_SPIN} {action_text} **{abs(points)}** damage point(s) for **{member.display_name}**. Total Damage: **{current_damage}/25**.")
-        await log_action(interaction.guild, "Damage Points Updated",
-                         f"**User:** {member.mention}\n**Point Change:** {points:+d}\n**Total Points:** {current_damage}/25\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
-                         discord.Color.orange() if points > 0 else discord.Color.green())
+    response_msg = (
+        f"{SUCCESSFUL_SPIN} Added **{pts_to_add}** damage point(s) for **{member.display_name}**.\n"
+        f"**Total Damage:** `{current_damage}/25`\n"
+        f"**Punishment Status:** {punishment}"
+    )
+    await interaction.response.send_message(response_msg)
 
 
 @bot.command(name="damage")
 @commands.has_permissions(kick_members=True)
 async def damage_prefix(ctx, member: discord.Member, points: int, *, reason: str = "No reason provided"):
     if member.bot:
-        await ctx.send(f"{UNSUCCESSFUL_SPIN} You cannot apply damage to bots.")
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} You cannot modify damage for bots.")
         return
 
-    key = (ctx.guild.id, member.id)
-    user_damage[key] = max(0, user_damage.get(key, 0) + points)
-    current_damage = user_damage[key]
+    pts_to_add = abs(points)
+    current_damage, punishment = await apply_damage_and_punish(ctx.guild, member, pts_to_add, reason, ctx.author)
 
-    if current_damage >= 25:
-        try:
-            await member.ban(reason=f"Reached 25+ damage points (Auto-ban). Last update: {reason}")
-            await ctx.send(
-                f"{SUCCESSFUL_SPIN} **{member.display_name}** reached **{current_damage}** damage points and was **automatically banned**.")
-            await log_action(ctx.guild, "Auto-Ban Executed",
-                             f"**User:** {member.mention} ({member.id})\n**Reason:** Accumulated {current_damage} damage points.",
-                             discord.Color.red())
-        except discord.Forbidden:
-            await ctx.send(
-                f"{UNSUCCESSFUL_SPIN} **{member.display_name}** reached **{current_damage}** damage points, but I do not have permission to ban them.")
-    else:
-        action_text = "Added" if points >= 0 else "Removed"
-        await ctx.send(
-            f"{SUCCESSFUL_SPIN} {action_text} **{abs(points)}** damage point(s) for **{member.display_name}**. Total Damage: **{current_damage}/25**.")
-        await log_action(ctx.guild, "Damage Points Updated",
-                         f"**User:** {member.mention}\n**Point Change:** {points:+d}\n**Total Points:** {current_damage}/25\n**Reason:** {reason}\n**Moderator:** {ctx.author.mention}",
-                         discord.Color.orange() if points > 0 else discord.Color.green())
+    response_msg = (
+        f"{SUCCESSFUL_SPIN} Added **{pts_to_add}** damage point(s) for **{member.display_name}**.\n"
+        f"**Total Damage:** `{current_damage}/25`\n"
+        f"**Punishment Status:** {punishment}"
+    )
+    await ctx.send(response_msg)
+
+
+# --- Remove Damage Commands ---
+
+@bot.tree.command(name="removedamage", description="Remove damage points from a user")
+@app_commands.checks.has_permissions(kick_members=True)
+async def removedamage(interaction: discord.Interaction, member: discord.Member, points: int,
+                       reason: str = "No reason provided"):
+    if member.bot:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot modify damage for bots.",
+                                                ephemeral=True)
+        return
+
+    pts_to_remove = -abs(points)
+    current_damage, punishment = await apply_damage_and_punish(interaction.guild, member, pts_to_remove, reason,
+                                                               interaction.user)
+
+    response_msg = (
+        f"{SUCCESSFUL_SPIN} Removed **{abs(points)}** damage point(s) from **{member.display_name}**.\n"
+        f"**Total Damage:** `{current_damage}/25`\n"
+        f"**Status:** {punishment}"
+    )
+    await interaction.response.send_message(response_msg)
+
+
+@bot.command(name="removedamage")
+@commands.has_permissions(kick_members=True)
+async def removedamage_prefix(ctx, member: discord.Member, points: int, *, reason: str = "No reason provided"):
+    if member.bot:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} You cannot modify damage for bots.")
+        return
+
+    pts_to_remove = -abs(points)
+    current_damage, punishment = await apply_damage_and_punish(ctx.guild, member, pts_to_remove, reason, ctx.author)
+
+    response_msg = (
+        f"{SUCCESSFUL_SPIN} Removed **{abs(points)}** damage point(s) from **{member.display_name}**.\n"
+        f"**Total Damage:** `{current_damage}/25`\n"
+        f"**Status:** {punishment}"
+    )
+    await ctx.send(response_msg)
 
 
 @bot.tree.command(name="checkdamage", description="Check the current damage points of a user")
@@ -584,32 +662,20 @@ async def warn(interaction: discord.Interaction, member: discord.Member, points:
         return
 
     key = (interaction.guild_id, member.id)
-    user_damage[key] = user_damage.get(key, 0) + points
-    current_damage = user_damage[key]
-
     if key not in user_warnings:
         user_warnings[key] = []
-
     user_warnings[key].append({"points": points, "reason": reason, "by": interaction.user.display_name})
 
-    if current_damage >= 25:
-        try:
-            await member.ban(reason=f"Reached 25+ damage points (Auto-ban). Last warning: {reason}")
-            await interaction.response.send_message(
-                f"{SUCCESSFUL_SPIN} **{member.display_name}** accumulated **{current_damage}** damage points and was **automatically banned**.")
-            await log_action(interaction.guild, "Auto-Ban Executed",
-                             f"**User:** {member.mention} ({member.id})\n**Reason:** Accumulated {current_damage} damage points.",
-                             discord.Color.red())
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                f"{UNSUCCESSFUL_SPIN} **{member.display_name}** reached **{current_damage}** damage points, but I do not have permission to ban them.",
-                ephemeral=True)
-    else:
-        await interaction.response.send_message(
-            f"{SUCCESSFUL_SPIN} Warned **{member.display_name}** (+{points} points). Total Damage: **{current_damage}/25**.")
-        await log_action(interaction.guild, "Member Warned",
-                         f"**User:** {member.mention}\n**Added Points:** {points}\n**Total Points:** {current_damage}/25\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
-                         discord.Color.orange())
+    current_damage, punishment = await apply_damage_and_punish(interaction.guild, member, points, reason,
+                                                               interaction.user)
+
+    response_msg = (
+        f"{SUCCESSFUL_SPIN} Warned **{member.display_name}** (+{points} pts).\n"
+        f"**Reason:** {reason}\n"
+        f"**Total Damage:** `{current_damage}/25`\n"
+        f"**Punishment Status:** {punishment}"
+    )
+    await interaction.response.send_message(response_msg)
 
 
 @bot.command(name="warn")
@@ -620,31 +686,19 @@ async def warn_prefix(ctx, member: discord.Member, points: int, *, reason: str =
         return
 
     key = (ctx.guild.id, member.id)
-    user_damage[key] = user_damage.get(key, 0) + points
-    current_damage = user_damage[key]
-
     if key not in user_warnings:
         user_warnings[key] = []
-
     user_warnings[key].append({"points": points, "reason": reason, "by": ctx.author.display_name})
 
-    if current_damage >= 25:
-        try:
-            await member.ban(reason=f"Reached 25+ damage points (Auto-ban). Last warning: {reason}")
-            await ctx.send(
-                f"{SUCCESSFUL_SPIN} **{member.display_name}** accumulated **{current_damage}** damage points and was **automatically banned**.")
-            await log_action(ctx.guild, "Auto-Ban Executed",
-                             f"**User:** {member.mention} ({member.id})\n**Reason:** Accumulated {current_damage} damage points.",
-                             discord.Color.red())
-        except discord.Forbidden:
-            await ctx.send(
-                f"{UNSUCCESSFUL_SPIN} **{member.display_name}** reached **{current_damage}** damage points, but I do not have permission to ban them.")
-    else:
-        await ctx.send(
-            f"{SUCCESSFUL_SPIN} Warned **{member.display_name}** (+{points} points). Total Damage: **{current_damage}/25**.")
-        await log_action(ctx.guild, "Member Warned",
-                         f"**User:** {member.mention}\n**Added Points:** {points}\n**Total Points:** {current_damage}/25\n**Reason:** {reason}\n**Moderator:** {ctx.author.mention}",
-                         discord.Color.orange())
+    current_damage, punishment = await apply_damage_and_punish(ctx.guild, member, points, reason, ctx.author)
+
+    response_msg = (
+        f"{SUCCESSFUL_SPIN} Warned **{member.display_name}** (+{points} pts).\n"
+        f"**Reason:** {reason}\n"
+        f"**Total Damage:** `{current_damage}/25`\n"
+        f"**Punishment Status:** {punishment}"
+    )
+    await ctx.send(response_msg)
 
 
 @bot.tree.command(name="warnings", description="View warnings and damage for a user")
@@ -694,6 +748,13 @@ async def clearwarnings(interaction: discord.Interaction, member: discord.Member
     key = (interaction.guild_id, member.id)
     user_damage.pop(key, None)
     user_warnings.pop(key, None)
+
+    if member.timed_out_until:
+        try:
+            await member.timeout(None, reason=f"Warnings cleared by {interaction.user.display_name}")
+        except discord.Forbidden:
+            pass
+
     await interaction.response.send_message(
         f"{SUCCESSFUL_SPIN} Cleared all damage points and warnings for **{member.display_name}**.")
     await log_action(interaction.guild, "Warnings Cleared",
@@ -706,6 +767,13 @@ async def clearwarnings_prefix(ctx, member: discord.Member):
     key = (ctx.guild.id, member.id)
     user_damage.pop(key, None)
     user_warnings.pop(key, None)
+
+    if member.timed_out_until:
+        try:
+            await member.timeout(None, reason=f"Warnings cleared by {ctx.author.display_name}")
+        except discord.Forbidden:
+            pass
+
     await ctx.send(f"{SUCCESSFUL_SPIN} Cleared all damage points and warnings for **{member.display_name}**.")
     await log_action(ctx.guild, "Warnings Cleared", f"**User:** {member.mention}\n**Cleared By:** {ctx.author.mention}",
                      discord.Color.green())
