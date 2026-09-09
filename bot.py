@@ -38,7 +38,6 @@ threading.Thread(target=keep_alive_ping, daemon=True).start()
 # --- Discord Bot Setup ---
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
-LOG_CHANNEL_ID = int(os.getenv('LOG_CHANNEL_ID', '1494367513658527865'))
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -50,35 +49,47 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 SUCCESSFUL_SPIN = "<a:SuccessfulSpin:1547127487824142346>"
 UNSUCCESSFUL_SPIN = "<a:UnsuccessfulSpin:1547127600693116999>"
 
-# Configuration & Active Giveaway Storage
-user_damage = {}
-user_warnings = {}
-logging_config = {
-    "msg_log_channel": None,
-    "media_log_channel": None
-}
-active_giveaways = {}  # Stores msg_id -> giveaway data dict
+# Server-Specific Storage: guild_id -> config/data dicts
+server_configs = {}
+user_damage = {}      # (guild_id, user_id) -> total damage points
+user_warnings = {}    # (guild_id, user_id) -> list of warning dicts
+active_giveaways = {} # message_id -> giveaway data dict
+
+def get_server_config(guild_id: int) -> dict:
+    if guild_id not in server_configs:
+        server_configs[guild_id] = {
+            "log_channel": int(os.getenv('LOG_CHANNEL_ID', '0')) or None,
+            "msg_log_channel": None,
+            "media_log_channel": None
+        }
+    return server_configs[guild_id]
 
 async def log_action(guild: discord.Guild, title: str, description: str, color: discord.Color):
-    channel = guild.get_channel(LOG_CHANNEL_ID)
-    if channel:
-        embed = discord.Embed(title=title, description=description, color=color, timestamp=discord.utils.utcnow())
-        await channel.send(embed=embed)
+    config = get_server_config(guild.id)
+    log_chan_id = config.get("log_channel")
+    if log_chan_id:
+        channel = guild.get_channel(log_chan_id)
+        if channel:
+            embed = discord.Embed(title=title, description=description, color=color, timestamp=discord.utils.utcnow())
+            await channel.send(embed=embed)
 
 @bot.event
 async def on_ready():
+    # Sync slash commands globally across all joined guilds
     await bot.tree.sync()
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    print(f"Logged in as {bot.user} (ID: {bot.user.id}) - Active across {len(bot.guilds)} servers")
 
-# --- Event Listeners for Custom Logging ---
+# --- Event Listeners for Dynamic Per-Server Logging ---
 
 @bot.event
 async def on_message_delete(message: discord.Message):
     if message.author.bot or not message.guild:
         return
 
-    if logging_config["msg_log_channel"]:
-        log_chan = message.guild.get_channel(logging_config["msg_log_channel"])
+    config = get_server_config(message.guild.id)
+
+    if config["msg_log_channel"]:
+        log_chan = message.guild.get_channel(config["msg_log_channel"])
         if log_chan and message.content:
             embed = discord.Embed(
                 title="Message Deleted",
@@ -88,8 +99,8 @@ async def on_message_delete(message: discord.Message):
             )
             await log_chan.send(embed=embed)
 
-    if logging_config["media_log_channel"]:
-        media_chan = message.guild.get_channel(logging_config["media_log_channel"])
+    if config["media_log_channel"]:
+        media_chan = message.guild.get_channel(config["media_log_channel"])
         if media_chan:
             has_media = any(att.content_type and att.content_type.startswith(('image/', 'video/')) for att in message.attachments)
             has_gif_link = "tenor.com" in message.content or "giphy.com" in message.content or message.content.endswith(('.png', '.jpg', '.jpeg', '.gif'))
@@ -137,12 +148,10 @@ class EmbedModal(discord.ui.Modal, title="Create Custom Embed"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Resolve target channel from modal text input
         target_channel = interaction.channel
         channel_raw = self.channel_mention_input.value.strip()
 
         if channel_raw:
-            # Extract numbers if passed as mention <#12345678> or raw ID string
             cleaned_id = re.sub(r"\D", "", channel_raw)
             if cleaned_id.isdigit():
                 found_channel = interaction.guild.get_channel(int(cleaned_id))
@@ -294,6 +303,7 @@ class GiveawayModal(discord.ui.Modal, title="Create a Giveaway"):
 
         active_giveaways[msg.id] = {
             "msg": msg,
+            "guild_id": interaction.guild_id,
             "channel_id": interaction.channel_id,
             "prize": prize,
             "host": interaction.user,
@@ -390,8 +400,8 @@ async def giveawayend(interaction: discord.Interaction, message_id: str):
         return
 
     data = active_giveaways.get(msg_id)
-    if not data or not data["active"]:
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} No active giveaway found with that Message ID.", ephemeral=True)
+    if not data or not data["active"] or data.get("guild_id") != interaction.guild_id:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} No active giveaway found with that Message ID in this server.", ephemeral=True)
         return
 
     await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Ending giveaway now...", ephemeral=True)
@@ -407,8 +417,8 @@ async def giveawayreroll(interaction: discord.Interaction, message_id: str):
         return
 
     data = active_giveaways.get(msg_id)
-    if not data:
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Giveaway data not found for that Message ID.", ephemeral=True)
+    if not data or data.get("guild_id") != interaction.guild_id:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Giveaway data not found for that Message ID in this server.", ephemeral=True)
         return
 
     view = data["view"]
@@ -439,8 +449,8 @@ async def giveawaydelete(interaction: discord.Interaction, message_id: str):
         return
 
     data = active_giveaways.get(msg_id)
-    if not data:
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Giveaway not found.", ephemeral=True)
+    if not data or data.get("guild_id") != interaction.guild_id:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Giveaway not found in this server.", ephemeral=True)
         return
 
     data["active"] = False
@@ -453,13 +463,13 @@ async def giveawaydelete(interaction: discord.Interaction, message_id: str):
     active_giveaways.pop(msg_id, None)
     await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Giveaway deleted successfully.", ephemeral=True)
 
-@bot.tree.command(name="giveawaylist", description="List all currently running giveaways")
+@bot.tree.command(name="giveawaylist", description="List all currently running giveaways in this server")
 @app_commands.checks.has_permissions(administrator=True)
 async def giveawaylist(interaction: discord.Interaction):
-    active_list = [g for g in active_giveaways.values() if g["active"]]
+    active_list = [g for g in active_giveaways.values() if g["active"] and g.get("guild_id") == interaction.guild_id]
 
     if not active_list:
-        await interaction.response.send_message(f"{SUCCESSFUL_SPIN} There are currently no active giveaways.", ephemeral=True)
+        await interaction.response.send_message(f"{SUCCESSFUL_SPIN} There are currently no active giveaways in this server.", ephemeral=True)
         return
 
     embed = discord.Embed(
@@ -484,18 +494,24 @@ async def giveawaylist(interaction: discord.Interaction):
 
 # --- Moderation & Utility Commands ---
 
-@bot.tree.command(name="setlogchannel", description="Set dynamic logging channels for messages or media")
+@bot.tree.command(name="setlogchannel", description="Set dynamic logging channels for messages, media, or general logs")
 @app_commands.checks.has_permissions(administrator=True)
 @app_commands.choices(log_type=[
+    app_commands.Choice(name="General Audit Logs", value="general"),
     app_commands.Choice(name="Message Logs (Deleted Messages)", value="msg"),
     app_commands.Choice(name="Media Logs (Images/GIFs)", value="media")
 ])
 async def setlogchannel(interaction: discord.Interaction, log_type: app_commands.Choice[str], channel: discord.TextChannel):
-    if log_type.value == "msg":
-        logging_config["msg_log_channel"] = channel.id
+    config = get_server_config(interaction.guild_id)
+
+    if log_type.value == "general":
+        config["log_channel"] = channel.id
+        await interaction.response.send_message(f"{SUCCESSFUL_SPIN} General log channel set to {channel.mention}.")
+    elif log_type.value == "msg":
+        config["msg_log_channel"] = channel.id
         await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Deleted message logging channel set to {channel.mention}.")
     elif log_type.value == "media":
-        logging_config["media_log_channel"] = channel.id
+        config["media_log_channel"] = channel.id
         await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Media logging channel set to {channel.mention}.")
 
 @bot.tree.command(name="poll", description="Create a simple reaction poll")
@@ -521,14 +537,15 @@ async def warn(interaction: discord.Interaction, member: discord.Member, points:
         await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot warn bots.", ephemeral=True)
         return
 
-    user_damage[member.id] = user_damage.get(member.id, 0) + points
-    current_damage = user_damage[member.id]
+    key = (interaction.guild_id, member.id)
+    user_damage[key] = user_damage.get(key, 0) + points
+    current_damage = user_damage[key]
 
-    if member.id not in user_warnings:
-        user_warnings[member.id] = []
+    if key not in user_warnings:
+        user_warnings[key] = []
 
     warn_entry = {"points": points, "reason": reason, "by": interaction.user.display_name}
-    user_warnings[member.id].append(warn_entry)
+    user_warnings[key].append(warn_entry)
 
     if current_damage >= 25:
         try:
@@ -560,12 +577,13 @@ async def warn(interaction: discord.Interaction, member: discord.Member, points:
 
 @bot.tree.command(name="warnings", description="View warnings and damage for a user")
 async def warnings(interaction: discord.Interaction, member: discord.Member):
-    total_points = user_damage.get(member.id, 0)
-    warns = user_warnings.get(member.id, [])
+    key = (interaction.guild_id, member.id)
+    total_points = user_damage.get(key, 0)
+    warns = user_warnings.get(key, [])
 
     if not warns:
         await interaction.response.send_message(
-            f"{SUCCESSFUL_SPIN} **{member.display_name}** has no recorded warnings or damage points.")
+            f"{SUCCESSFUL_SPIN} **{member.display_name}** has no recorded warnings or damage points in this server.")
         return
 
     embed = discord.Embed(
@@ -585,8 +603,9 @@ async def warnings(interaction: discord.Interaction, member: discord.Member):
 @bot.tree.command(name="clearwarnings", description="Reset warnings and damage points for a user")
 @app_commands.checks.has_permissions(administrator=True)
 async def clearwarnings(interaction: discord.Interaction, member: discord.Member):
-    user_damage.pop(member.id, None)
-    user_warnings.pop(member.id, None)
+    key = (interaction.guild_id, member.id)
+    user_damage.pop(key, None)
+    user_warnings.pop(key, None)
 
     await interaction.response.send_message(
         f"{SUCCESSFUL_SPIN} Cleared all damage points and warnings for **{member.display_name}**.")
