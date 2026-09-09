@@ -119,6 +119,13 @@ async def log_action(guild: discord.Guild, title: str, description: str, color: 
             await channel.send(embed=embed)
 
 
+async def send_user_dm(user: discord.User, embed: discord.Embed):
+    try:
+        await user.send(embed=embed)
+    except discord.Forbidden:
+        pass  # User has DMs disabled or blocked the bot
+
+
 @bot.event
 async def on_ready():
     await bot.tree.sync()
@@ -136,9 +143,17 @@ async def apply_damage_and_punish(guild: discord.Guild, member: discord.Member, 
 
     punishment_text = "No additional punishment applied."
 
-    # 1. Check for Auto-Ban (25+ points)
     if current_damage >= 25:
         try:
+            dm_embed = discord.Embed(
+                title=f"🔨 Banned from {guild.name}",
+                description=f"You reached **{current_damage}/25** damage points and have been automatically banned.",
+                color=discord.Color.red(),
+                timestamp=discord.utils.utcnow()
+            )
+            dm_embed.add_field(name="Reason", value=reason, inline=False)
+            await send_user_dm(member, dm_embed)
+
             await member.ban(reason=f"Reached {current_damage} damage points (Auto-ban). Last reason: {reason}")
             punishment_text = "🔨 **AUTOMATICALLY BANNED** (Reached 25+ damage points)"
             await log_action(guild, "Auto-Ban Executed",
@@ -147,14 +162,20 @@ async def apply_damage_and_punish(guild: discord.Guild, member: discord.Member, 
         except discord.Forbidden:
             punishment_text = "⚠️ Reached 25+ points, but I lack permissions to ban this member."
 
-    # 2. Check for Auto-Mutes (Timeouts) & Unmutes
     else:
-        # If points drop below 3 via removedamage, lift active timeout if present
         if points < 0 and current_damage < 3:
             if member.timed_out_until:
                 try:
                     await member.timeout(None, reason=f"Damage reduced to {current_damage} by {moderator.display_name}")
                     punishment_text = "🔊 **TIMEOUT REMOVED** (Damage reduced below 3 points)"
+
+                    dm_embed = discord.Embed(
+                        title=f"🔊 Timeout Removed in {guild.name}",
+                        description=f"Your damage was reduced to **{current_damage}/25**. Your timeout has been lifted.",
+                        color=discord.Color.green(),
+                        timestamp=discord.utils.utcnow()
+                    )
+                    await send_user_dm(member, dm_embed)
                 except discord.Forbidden:
                     punishment_text = "⚠️ Damage lowered, but I lack permission to remove active timeout."
         else:
@@ -175,6 +196,16 @@ async def apply_damage_and_punish(guild: discord.Guild, member: discord.Member, 
                 try:
                     await member.timeout(mute_duration, reason=f"Accumulated {current_damage} damage points.")
                     punishment_text = f"🔇 **AUTOMATICALLY MUTED** for **{duration_str}** (Reached {current_damage} points)"
+
+                    dm_embed = discord.Embed(
+                        title=f"🔇 Muted in {guild.name}",
+                        description=f"You reached **{current_damage}/25** damage points and were muted for **{duration_str}**.",
+                        color=discord.Color.gold(),
+                        timestamp=discord.utils.utcnow()
+                    )
+                    dm_embed.add_field(name="Reason", value=reason, inline=False)
+                    await send_user_dm(member, dm_embed)
+
                     await log_action(
                         guild,
                         "Auto-Mute Executed",
@@ -186,8 +217,6 @@ async def apply_damage_and_punish(guild: discord.Guild, member: discord.Member, 
 
     return current_damage, punishment_text
 
-
-# --- Helper Function for Damage Embed Creation ---
 
 def create_damage_embed(action_type: str, member: discord.Member, points: int, current_damage: int, punishment: str,
                         reason: str, moderator: discord.User) -> discord.Embed:
@@ -295,6 +324,313 @@ async def setprefix(interaction: discord.Interaction, prefix: str):
 async def setprefix_prefix(ctx, prefix: str):
     server_prefixes[ctx.guild.id] = prefix
     await ctx.send(f"{SUCCESSFUL_SPIN} Bot prefix updated to `{prefix}` for this server!")
+
+
+# --- Manual Moderation Commands (Mute, Unmute, Ban, Unban) ---
+
+@bot.tree.command(name="mute", description="Mute (timeout) a member manually")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def mute(interaction: discord.Interaction, member: discord.Member, minutes: int = 60,
+               reason: str = "No reason provided"):
+    if member.bot:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot mute bots.", ephemeral=True)
+        return
+
+    duration = timedelta(minutes=minutes)
+    dm_embed = discord.Embed(
+        title=f"🔇 Muted in {interaction.guild.name}",
+        description=f"You have been muted for **{minutes} minutes**.",
+        color=discord.Color.gold(),
+        timestamp=discord.utils.utcnow()
+    )
+    dm_embed.add_field(name="Reason", value=reason, inline=False)
+    dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
+    await send_user_dm(member, dm_embed)
+
+    try:
+        await member.timeout(duration, reason=reason)
+        embed = discord.Embed(
+            title="🔇 Member Muted",
+            description=f"{SUCCESSFUL_SPIN} Muted {member.mention} for **{minutes} minutes**.",
+            color=discord.Color.gold(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
+                         icon_url=interaction.user.display_avatar.url)
+        await interaction.response.send_message(embed=embed)
+        await log_action(interaction.guild, "Manual Mute Executed",
+                         f"**User:** {member.mention}\n**Duration:** {minutes} mins\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
+                         discord.Color.gold())
+    except discord.Forbidden:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I lack permission to mute this member.",
+                                                ephemeral=True)
+
+
+@bot.command(name="mute")
+@commands.has_permissions(moderate_members=True)
+async def mute_prefix(ctx, member: discord.Member, minutes: int = 60, *, reason: str = "No reason provided"):
+    if member.bot:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} You cannot mute bots.")
+        return
+
+    duration = timedelta(minutes=minutes)
+    dm_embed = discord.Embed(
+        title=f"🔇 Muted in {ctx.guild.name}",
+        description=f"You have been muted for **{minutes} minutes**.",
+        color=discord.Color.gold(),
+        timestamp=discord.utils.utcnow()
+    )
+    dm_embed.add_field(name="Reason", value=reason, inline=False)
+    dm_embed.set_footer(text=f"Moderator: {ctx.author.display_name}")
+    await send_user_dm(member, dm_embed)
+
+    try:
+        await member.timeout(duration, reason=reason)
+        embed = discord.Embed(
+            title="🔇 Member Muted",
+            description=f"{SUCCESSFUL_SPIN} Muted {member.mention} for **{minutes} minutes**.",
+            color=discord.Color.gold(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text=f"Moderator: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+        await ctx.send(embed=embed)
+        await log_action(ctx.guild, "Manual Mute Executed",
+                         f"**User:** {member.mention}\n**Duration:** {minutes} mins\n**Reason:** {reason}\n**Moderator:** {ctx.author.mention}",
+                         discord.Color.gold())
+    except discord.Forbidden:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} I lack permission to mute this member.")
+
+
+@bot.tree.command(name="unmute", description="Unmute (remove timeout) a member manually")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def unmute(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    if member.bot:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot unmute bots.", ephemeral=True)
+        return
+
+    dm_embed = discord.Embed(
+        title=f"🔊 Unmuted in {interaction.guild.name}",
+        description="Your mute/timeout has been removed.",
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow()
+    )
+    dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
+    await send_user_dm(member, dm_embed)
+
+    try:
+        await member.timeout(None, reason=reason)
+        embed = discord.Embed(
+            title="🔊 Member Unmuted",
+            description=f"{SUCCESSFUL_SPIN} Removed timeout for {member.mention}.",
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
+                         icon_url=interaction.user.display_avatar.url)
+        await interaction.response.send_message(embed=embed)
+        await log_action(interaction.guild, "Manual Unmute Executed",
+                         f"**User:** {member.mention}\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
+                         discord.Color.green())
+    except discord.Forbidden:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I lack permission to unmute this member.",
+                                                ephemeral=True)
+
+
+@bot.command(name="unmute")
+@commands.has_permissions(moderate_members=True)
+async def unmute_prefix(ctx, member: discord.Member, *, reason: str = "No reason provided"):
+    if member.bot:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} You cannot unmute bots.")
+        return
+
+    dm_embed = discord.Embed(
+        title=f"🔊 Unmuted in {ctx.guild.name}",
+        description="Your mute/timeout has been removed.",
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow()
+    )
+    dm_embed.set_footer(text=f"Moderator: {ctx.author.display_name}")
+    await send_user_dm(member, dm_embed)
+
+    try:
+        await member.timeout(None, reason=reason)
+        embed = discord.Embed(
+            title="🔊 Member Unmuted",
+            description=f"{SUCCESSFUL_SPIN} Removed timeout for {member.mention}.",
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text=f"Moderator: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+        await ctx.send(embed=embed)
+        await log_action(ctx.guild, "Manual Unmute Executed",
+                         f"**User:** {member.mention}\n**Reason:** {reason}\n**Moderator:** {ctx.author.mention}",
+                         discord.Color.green())
+    except discord.Forbidden:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} I lack permission to unmute this member.")
+
+
+@bot.tree.command(name="ban", description="Ban a user manually")
+@app_commands.checks.has_permissions(ban_members=True)
+async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    if member.bot:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot ban bots.", ephemeral=True)
+        return
+
+    dm_embed = discord.Embed(
+        title=f"🔨 Banned from {interaction.guild.name}",
+        description="You have been manually banned by a moderator.",
+        color=discord.Color.red(),
+        timestamp=discord.utils.utcnow()
+    )
+    dm_embed.add_field(name="Reason", value=reason, inline=False)
+    dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
+    await send_user_dm(member, dm_embed)
+
+    try:
+        await member.ban(reason=reason)
+        embed = discord.Embed(
+            title="🔨 Member Banned",
+            description=f"{SUCCESSFUL_SPIN} Banned {member.mention}.",
+            color=discord.Color.red(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
+                         icon_url=interaction.user.display_avatar.url)
+        await interaction.response.send_message(embed=embed)
+        await log_action(interaction.guild, "Manual Ban Executed",
+                         f"**User:** {member.mention} ({member.id})\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
+                         discord.Color.red())
+    except discord.Forbidden:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I lack permission to ban this member.",
+                                                ephemeral=True)
+
+
+@bot.command(name="ban")
+@commands.has_permissions(ban_members=True)
+async def ban_prefix(ctx, member: discord.Member, *, reason: str = "No reason provided"):
+    if member.bot:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} You cannot ban bots.")
+        return
+
+    dm_embed = discord.Embed(
+        title=f"🔨 Banned from {ctx.guild.name}",
+        description="You have been manually banned by a moderator.",
+        color=discord.Color.red(),
+        timestamp=discord.utils.utcnow()
+    )
+    dm_embed.add_field(name="Reason", value=reason, inline=False)
+    dm_embed.set_footer(text=f"Moderator: {ctx.author.display_name}")
+    await send_user_dm(member, dm_embed)
+
+    try:
+        await member.ban(reason=reason)
+        embed = discord.Embed(
+            title="🔨 Member Banned",
+            description=f"{SUCCESSFUL_SPIN} Banned {member.mention}.",
+            color=discord.Color.red(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text=f"Moderator: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+        await ctx.send(embed=embed)
+        await log_action(ctx.guild, "Manual Ban Executed",
+                         f"**User:** {member.mention} ({member.id})\n**Reason:** {reason}\n**Moderator:** {ctx.author.mention}",
+                         discord.Color.red())
+    except discord.Forbidden:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} I lack permission to ban this member.")
+
+
+@bot.tree.command(name="unban", description="Unban a user manually by ID")
+@app_commands.checks.has_permissions(ban_members=True)
+async def unban(interaction: discord.Interaction, user_id: str, reason: str = "No reason provided"):
+    if not user_id.isdigit():
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please provide a valid numerical User ID.",
+                                                ephemeral=True)
+        return
+
+    uid = int(user_id)
+    try:
+        user = await bot.fetch_user(uid)
+        await interaction.guild.unban(user, reason=reason)
+
+        dm_embed = discord.Embed(
+            title=f"🔓 Unbanned from {interaction.guild.name}",
+            description="Your ban has been removed.",
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
+        await send_user_dm(user, dm_embed)
+
+        embed = discord.Embed(
+            title="🔓 Member Unbanned",
+            description=f"{SUCCESSFUL_SPIN} Unbanned **{user.name}** (`{user.id}`).",
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
+                         icon_url=interaction.user.display_avatar.url)
+        await interaction.response.send_message(embed=embed)
+        await log_action(interaction.guild, "Manual Unban Executed",
+                         f"**User:** {user.mention} ({user.id})\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
+                         discord.Color.green())
+    except discord.NotFound:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} User ID not found or not currently banned.",
+                                                ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I lack permission to unban users.",
+                                                ephemeral=True)
+
+
+@bot.command(name="unban")
+@commands.has_permissions(ban_members=True)
+async def unban_prefix(ctx, user_id: str, *, reason: str = "No reason provided"):
+    if not user_id.isdigit():
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Please provide a valid numerical User ID.")
+        return
+
+    uid = int(user_id)
+    try:
+        user = await bot.fetch_user(uid)
+        await ctx.guild.unban(user, reason=reason)
+
+        dm_embed = discord.Embed(
+            title=f"🔓 Unbanned from {ctx.guild.name}",
+            description="Your ban has been removed.",
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        dm_embed.set_footer(text=f"Moderator: {ctx.author.display_name}")
+        await send_user_dm(user, dm_embed)
+
+        embed = discord.Embed(
+            title="🔓 Member Unbanned",
+            description=f"{SUCCESSFUL_SPIN} Unbanned **{user.name}** (`{user.id}`).",
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_footer(text=f"Moderator: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+        await ctx.send(embed=embed)
+        await log_action(ctx.guild, "Manual Unban Executed",
+                         f"**User:** {user.mention} ({user.id})\n**Reason:** {reason}\n**Moderator:** {ctx.author.mention}",
+                         discord.Color.green())
+    except discord.NotFound:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} User ID not found or not currently banned.")
+    except discord.Forbidden:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} I lack permission to unban users.")
 
 
 # --- Speak / Say Commands ---
@@ -459,7 +795,7 @@ class GiveawayButton(discord.ui.View):
                     color=discord.Color.green(),
                     timestamp=discord.utils.utcnow()
                 )
-                await interaction.user.send(embed=dm_embed)
+                await send_user_dm(interaction.user, dm_embed)
             except discord.Forbidden:
                 pass
 
@@ -705,6 +1041,16 @@ async def warn(interaction: discord.Interaction, member: discord.Member, points:
     current_damage, punishment = await apply_damage_and_punish(interaction.guild, member, points, reason,
                                                                interaction.user)
 
+    dm_embed = discord.Embed(
+        title=f"⚠️ Warning Received in {interaction.guild.name}",
+        description=f"You received **+{points} damage points**.\n**Total Damage:** `{current_damage}/25`",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow()
+    )
+    dm_embed.add_field(name="Reason", value=reason, inline=False)
+    dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
+    await send_user_dm(member, dm_embed)
+
     embed = create_damage_embed("add", member, points, current_damage, punishment, reason, interaction.user)
     embed.title = "⚠️ User Warned"
     await interaction.response.send_message(embed=embed)
@@ -723,6 +1069,16 @@ async def warn_prefix(ctx, member: discord.Member, points: int, *, reason: str =
     user_warnings[key].append({"points": points, "reason": reason, "by": ctx.author.display_name})
 
     current_damage, punishment = await apply_damage_and_punish(ctx.guild, member, points, reason, ctx.author)
+
+    dm_embed = discord.Embed(
+        title=f"⚠️ Warning Received in {ctx.guild.name}",
+        description=f"You received **+{points} damage points**.\n**Total Damage:** `{current_damage}/25`",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow()
+    )
+    dm_embed.add_field(name="Reason", value=reason, inline=False)
+    dm_embed.set_footer(text=f"Moderator: {ctx.author.display_name}")
+    await send_user_dm(member, dm_embed)
 
     embed = create_damage_embed("add", member, points, current_damage, punishment, reason, ctx.author)
     embed.title = "⚠️ User Warned"
