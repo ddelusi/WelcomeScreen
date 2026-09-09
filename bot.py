@@ -330,16 +330,34 @@ async def setprefix_prefix(ctx, prefix: str):
 
 @bot.tree.command(name="mute", description="Mute (timeout) a member manually")
 @app_commands.checks.has_permissions(moderate_members=True)
-async def mute(interaction: discord.Interaction, member: discord.Member, minutes: int = 60,
+@app_commands.choices(unit=[
+    app_commands.Choice(name="Minutes", value="minutes"),
+    app_commands.Choice(name="Hours", value="hours"),
+    app_commands.Choice(name="Days", value="days")
+])
+async def mute(interaction: discord.Interaction, member: discord.Member, duration: int, unit: app_commands.Choice[str],
                reason: str = "No reason provided"):
     if member.bot:
         await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot mute bots.", ephemeral=True)
         return
 
-    duration = timedelta(minutes=minutes)
+    if unit.value == "minutes":
+        delta = timedelta(minutes=duration)
+        time_str = f"{duration} minute(s)"
+    elif unit.value == "hours":
+        delta = timedelta(hours=duration)
+        time_str = f"{duration} hour(s)"
+    elif unit.value == "days":
+        if duration > 28:
+            await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Discord timeouts cannot exceed 28 days.",
+                                                    ephemeral=True)
+            return
+        delta = timedelta(days=duration)
+        time_str = f"{duration} day(s)"
+
     dm_embed = discord.Embed(
         title=f"🔇 Muted in {interaction.guild.name}",
-        description=f"You have been muted for **{minutes} minutes**.",
+        description=f"You have been muted for **{time_str}**.",
         color=discord.Color.gold(),
         timestamp=discord.utils.utcnow()
     )
@@ -348,10 +366,10 @@ async def mute(interaction: discord.Interaction, member: discord.Member, minutes
     await send_user_dm(member, dm_embed)
 
     try:
-        await member.timeout(duration, reason=reason)
+        await member.timeout(delta, reason=reason)
         embed = discord.Embed(
             title="🔇 Member Muted",
-            description=f"{SUCCESSFUL_SPIN} Muted {member.mention} for **{minutes} minutes**.",
+            description=f"{SUCCESSFUL_SPIN} Muted {member.mention} for **{time_str}**.",
             color=discord.Color.gold(),
             timestamp=discord.utils.utcnow()
         )
@@ -361,7 +379,7 @@ async def mute(interaction: discord.Interaction, member: discord.Member, minutes
                          icon_url=interaction.user.display_avatar.url)
         await interaction.response.send_message(embed=embed)
         await log_action(interaction.guild, "Manual Mute Executed",
-                         f"**User:** {member.mention}\n**Duration:** {minutes} mins\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
+                         f"**User:** {member.mention}\n**Duration:** {time_str}\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
                          discord.Color.gold())
     except discord.Forbidden:
         await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I lack permission to mute this member.",
@@ -370,15 +388,40 @@ async def mute(interaction: discord.Interaction, member: discord.Member, minutes
 
 @bot.command(name="mute")
 @commands.has_permissions(moderate_members=True)
-async def mute_prefix(ctx, member: discord.Member, minutes: int = 60, *, reason: str = "No reason provided"):
+async def mute_prefix(ctx, member: discord.Member, duration_str: str, *, reason: str = "No reason provided"):
     if member.bot:
         await ctx.send(f"{UNSUCCESSFUL_SPIN} You cannot mute bots.")
         return
 
-    duration = timedelta(minutes=minutes)
+    match = re.match(r"^(\d+)\s*([a-zA-Z]+)$", duration_str.strip())
+    if not match:
+        await ctx.send(
+            f"{UNSUCCESSFUL_SPIN} Invalid format! Use e.g. `!mute @user 10m`, `!mute @user 2h`, or `!mute @user 1d`.")
+        return
+
+    amount, unit = match.groups()
+    amount = int(amount)
+    unit = unit.lower()
+
+    if unit in ['m', 'min', 'mins', 'minute', 'minutes']:
+        delta = timedelta(minutes=amount)
+        time_str = f"{amount} minute(s)"
+    elif unit in ['h', 'hr', 'hrs', 'hour', 'hours']:
+        delta = timedelta(hours=amount)
+        time_str = f"{amount} hour(s)"
+    elif unit in ['d', 'day', 'days']:
+        if amount > 28:
+            await ctx.send(f"{UNSUCCESSFUL_SPIN} Discord timeouts cannot exceed 28 days.")
+            return
+        delta = timedelta(days=amount)
+        time_str = f"{amount} day(s)"
+    else:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Invalid unit! Use `m` (minutes), `h` (hours), or `d` (days).")
+        return
+
     dm_embed = discord.Embed(
         title=f"🔇 Muted in {ctx.guild.name}",
-        description=f"You have been muted for **{minutes} minutes**.",
+        description=f"You have been muted for **{time_str}**.",
         color=discord.Color.gold(),
         timestamp=discord.utils.utcnow()
     )
@@ -387,10 +430,10 @@ async def mute_prefix(ctx, member: discord.Member, minutes: int = 60, *, reason:
     await send_user_dm(member, dm_embed)
 
     try:
-        await member.timeout(duration, reason=reason)
+        await member.timeout(delta, reason=reason)
         embed = discord.Embed(
             title="🔇 Member Muted",
-            description=f"{SUCCESSFUL_SPIN} Muted {member.mention} for **{minutes} minutes**.",
+            description=f"{SUCCESSFUL_SPIN} Muted {member.mention} for **{time_str}**.",
             color=discord.Color.gold(),
             timestamp=discord.utils.utcnow()
         )
@@ -399,7 +442,7 @@ async def mute_prefix(ctx, member: discord.Member, minutes: int = 60, *, reason:
         embed.set_footer(text=f"Moderator: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
         await log_action(ctx.guild, "Manual Mute Executed",
-                         f"**User:** {member.mention}\n**Duration:** {minutes} mins\n**Reason:** {reason}\n**Moderator:** {ctx.author.mention}",
+                         f"**User:** {member.mention}\n**Duration:** {time_str}\n**Reason:** {reason}\n**Moderator:** {ctx.author.mention}",
                          discord.Color.gold())
     except discord.Forbidden:
         await ctx.send(f"{UNSUCCESSFUL_SPIN} I lack permission to mute this member.")
