@@ -105,6 +105,64 @@ async def on_message_delete(message: discord.Message):
                     embed.set_footer(text=f"Attachment Name: {message.attachments[0].filename}")
                 await media_chan.send(embed=embed)
 
+# --- Embed Builder Modal ---
+
+class EmbedModal(discord.ui.Modal, title="Create Custom Embed"):
+    def __init__(self, target_channel: discord.TextChannel):
+        super().__init__()
+        self.target_channel = target_channel
+
+    embed_title = discord.ui.TextInput(
+        label="Title",
+        placeholder="Enter embed title...",
+        required=True
+    )
+    embed_description = discord.ui.TextInput(
+        label="Description",
+        style=discord.TextStyle.paragraph,
+        placeholder="Enter embed description...",
+        required=True
+    )
+    embed_color = discord.ui.TextInput(
+        label="Color (Hex)",
+        placeholder="Ex: 3498db or #ff0000",
+        default="3498db",
+        required=False
+    )
+    embed_image = discord.ui.TextInput(
+        label="Image URL",
+        placeholder="https://example.com/image.png",
+        required=False
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            color_hex = self.embed_color.value.lstrip('#')
+            color_int = int(color_hex, 16)
+        except ValueError:
+            color_int = 0x3498db
+
+        embed_obj = discord.Embed(
+            title=self.embed_title.value,
+            description=self.embed_description.value,
+            color=discord.Color(color_int)
+        )
+
+        if self.embed_image.value.strip():
+            embed_obj.set_image(url=self.embed_image.value.strip())
+
+        try:
+            await self.target_channel.send(embed=embed_obj)
+            await interaction.response.send_message(
+                f"{SUCCESSFUL_SPIN} Embed successfully sent to {self.target_channel.mention}!",
+                ephemeral=True
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages in {self.target_channel.mention}.",
+                ephemeral=True
+            )
+
 # --- Giveaway Management System ---
 
 def parse_duration(duration_str: str) -> int:
@@ -139,7 +197,6 @@ class GiveawayButton(discord.ui.View):
             self.entries.add(interaction.user.id)
             await interaction.response.send_message("You entered the giveaway!", ephemeral=True)
 
-            # Send DM to user confirming entry
             try:
                 dm_embed = discord.Embed(
                     title="🎉 Giveaway Entry Confirmed!",
@@ -149,7 +206,7 @@ class GiveawayButton(discord.ui.View):
                 )
                 await interaction.user.send(embed=dm_embed)
             except discord.Forbidden:
-                pass  # Ignore if user has DMs closed
+                pass
 
 class GiveawayModal(discord.ui.Modal, title="Create a Giveaway"):
     duration_input = discord.ui.TextInput(
@@ -217,7 +274,6 @@ class GiveawayModal(discord.ui.Modal, title="Create a Giveaway"):
         msg = await interaction.channel.send(embed=build_embed(), view=view)
         view.message_id = msg.id
 
-        # Register giveaway into tracking dictionary
         active_giveaways[msg.id] = {
             "msg": msg,
             "channel_id": interaction.channel_id,
@@ -229,18 +285,16 @@ class GiveawayModal(discord.ui.Modal, title="Create a Giveaway"):
             "active": True
         }
 
-        # Live counter update loop
         start_time = time.time()
         while time.time() - start_time < seconds:
             await asyncio.sleep(5)
             if msg.id not in active_giveaways or not active_giveaways[msg.id]["active"]:
-                return  # Terminate loop if ended early or deleted
+                return
             try:
                 await msg.edit(embed=build_embed(), view=view)
             except discord.HTTPException:
                 break
 
-        # Process standard end if still active
         if msg.id in active_giveaways and active_giveaways[msg.id]["active"]:
             await finalize_giveaway(msg.id, interaction.guild)
 
@@ -426,20 +480,11 @@ async def setlogchannel(interaction: discord.Interaction, log_type: app_commands
         logging_config["media_log_channel"] = channel.id
         await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Media logging channel set to {channel.mention}.")
 
-@bot.tree.command(name="embed", description="Create and send a custom embed")
+@bot.tree.command(name="embed", description="Create and send a custom embed via interactive modal")
 @app_commands.checks.has_permissions(manage_messages=True)
-async def embed(interaction: discord.Interaction, title: str, description: str, color_hex: str = "3498db", image_url: str = None):
-    try:
-        color_int = int(color_hex.lstrip('#'), 16)
-    except ValueError:
-        color_int = 0x3498db
-
-    embed_obj = discord.Embed(title=title, description=description, color=discord.Color(color_int))
-    if image_url:
-        embed_obj.set_image(url=image_url)
-
-    await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Embed created!", ephemeral=True)
-    await interaction.channel.send(embed=embed_obj)
+async def embed(interaction: discord.Interaction, channel: discord.TextChannel = None):
+    target_channel = channel or interaction.channel
+    await interaction.response.send_modal(EmbedModal(target_channel=target_channel))
 
 @bot.tree.command(name="poll", description="Create a simple reaction poll")
 @app_commands.checks.has_permissions(manage_messages=True)
