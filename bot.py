@@ -26,8 +26,7 @@ def keep_alive_ping():
     time.sleep(20)
     while True:
         try:
-            # Replace with your actual Render URL after deploying
-            requests.get("https://YOUR-APP-NAME.onrender.com")
+            requests.get("https://welcomescreen-4ulq.onrender.com")
         except Exception:
             pass
         time.sleep(600)  # Pings every 10 minutes
