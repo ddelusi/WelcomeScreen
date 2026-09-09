@@ -216,7 +216,13 @@ class GiveawayModal(discord.ui.Modal, title="Create a Giveaway"):
             await interaction.channel.send(content=f"Congratulations {winner_mentions}!", embed=end_embed)
 
 
-@bot.tree.command(name="giveaway", description="Create a giveaway via an interactive form")
+@bot.tree.command(name="gcreate", description="starts a giveaway (interactive)")
+@app_commands.checks.has_permissions(administrator=True)
+async def gcreate(interaction: discord.Interaction):
+    await interaction.response.send_modal(GiveawayModal())
+
+
+@bot.tree.command(name="giveaway", description="starts a giveaway (interactive)")
 @app_commands.checks.has_permissions(administrator=True)
 async def giveaway(interaction: discord.Interaction):
     await interaction.response.send_modal(GiveawayModal())
