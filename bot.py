@@ -326,38 +326,53 @@ async def setprefix_prefix(ctx, prefix: str):
     await ctx.send(f"{SUCCESSFUL_SPIN} Bot prefix updated to `{prefix}` for this server!")
 
 
+# --- Helper Duration Parser ---
+
+def parse_duration(duration_str: str) -> int:
+    units = {
+        's': 1, 'sec': 1, 'second': 1, 'seconds': 1,
+        'm': 60, 'min': 60, 'minute': 60, 'minutes': 60,
+        'h': 3600, 'hr': 3600, 'hour': 3600, 'hours': 3600,
+        'd': 86400, 'day': 86400, 'days': 86400
+    }
+    match = re.match(r"^(\d+)\s*([a-zA-Z]+)$", duration_str.strip())
+    if not match:
+        return None
+    amount, unit = match.groups()
+    unit = unit.lower()
+    return int(amount) * units.get(unit, 0) if unit in units else None
+
+
 # --- Manual Moderation Commands (Mute, Unmute, Ban, Unban) ---
 
 @bot.tree.command(name="mute", description="Mute (timeout) a member manually")
 @app_commands.checks.has_permissions(moderate_members=True)
-@app_commands.choices(unit=[
-    app_commands.Choice(name="Minutes", value="minutes"),
-    app_commands.Choice(name="Hours", value="hours"),
-    app_commands.Choice(name="Days", value="days")
-])
-async def mute(interaction: discord.Interaction, member: discord.Member, duration: int, unit: app_commands.Choice[str],
+async def mute(interaction: discord.Interaction, member: discord.Member, duration: str,
                reason: str = "No reason provided"):
     if member.bot:
         await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot mute bots.", ephemeral=True)
         return
 
-    if unit.value == "minutes":
-        delta = timedelta(minutes=duration)
-        time_str = f"{duration} minute(s)"
-    elif unit.value == "hours":
-        delta = timedelta(hours=duration)
-        time_str = f"{duration} hour(s)"
-    elif unit.value == "days":
-        if duration > 28:
-            await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Discord timeouts cannot exceed 28 days.",
-                                                    ephemeral=True)
-            return
-        delta = timedelta(days=duration)
-        time_str = f"{duration} day(s)"
+    seconds = parse_duration(duration)
+    if not seconds or seconds <= 0:
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} Invalid duration format! Use e.g. `10m`, `2h`, or `3d`.",
+            ephemeral=True
+        )
+        return
+
+    if seconds > 28 * 86400:  # 28 days max in Discord
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} Discord timeouts cannot exceed 28 days.",
+            ephemeral=True
+        )
+        return
+
+    delta = timedelta(seconds=seconds)
 
     dm_embed = discord.Embed(
         title=f"🔇 Muted in {interaction.guild.name}",
-        description=f"You have been muted for **{time_str}**.",
+        description=f"You have been muted for **{duration}**.",
         color=discord.Color.gold(),
         timestamp=discord.utils.utcnow()
     )
@@ -369,7 +384,7 @@ async def mute(interaction: discord.Interaction, member: discord.Member, duratio
         await member.timeout(delta, reason=reason)
         embed = discord.Embed(
             title="🔇 Member Muted",
-            description=f"{SUCCESSFUL_SPIN} Muted {member.mention} for **{time_str}**.",
+            description=f"{SUCCESSFUL_SPIN} Muted {member.mention} for **{duration}**.",
             color=discord.Color.gold(),
             timestamp=discord.utils.utcnow()
         )
@@ -378,9 +393,12 @@ async def mute(interaction: discord.Interaction, member: discord.Member, duratio
         embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
                          icon_url=interaction.user.display_avatar.url)
         await interaction.response.send_message(embed=embed)
-        await log_action(interaction.guild, "Manual Mute Executed",
-                         f"**User:** {member.mention}\n**Duration:** {time_str}\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
-                         discord.Color.gold())
+        await log_action(
+            interaction.guild,
+            "Manual Mute Executed",
+            f"**User:** {member.mention}\n**Duration:** {duration}\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
+            discord.Color.gold()
+        )
     except discord.Forbidden:
         await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I lack permission to mute this member.",
                                                 ephemeral=True)
@@ -393,35 +411,21 @@ async def mute_prefix(ctx, member: discord.Member, duration_str: str, *, reason:
         await ctx.send(f"{UNSUCCESSFUL_SPIN} You cannot mute bots.")
         return
 
-    match = re.match(r"^(\d+)\s*([a-zA-Z]+)$", duration_str.strip())
-    if not match:
+    seconds = parse_duration(duration_str)
+    if not seconds or seconds <= 0:
         await ctx.send(
-            f"{UNSUCCESSFUL_SPIN} Invalid format! Use e.g. `!mute @user 10m`, `!mute @user 2h`, or `!mute @user 1d`.")
+            f"{UNSUCCESSFUL_SPIN} Invalid format! Use e.g. `!mute @user 10m`, `!mute @user 2h`, or `!mute @user 3d`.")
         return
 
-    amount, unit = match.groups()
-    amount = int(amount)
-    unit = unit.lower()
-
-    if unit in ['m', 'min', 'mins', 'minute', 'minutes']:
-        delta = timedelta(minutes=amount)
-        time_str = f"{amount} minute(s)"
-    elif unit in ['h', 'hr', 'hrs', 'hour', 'hours']:
-        delta = timedelta(hours=amount)
-        time_str = f"{amount} hour(s)"
-    elif unit in ['d', 'day', 'days']:
-        if amount > 28:
-            await ctx.send(f"{UNSUCCESSFUL_SPIN} Discord timeouts cannot exceed 28 days.")
-            return
-        delta = timedelta(days=amount)
-        time_str = f"{amount} day(s)"
-    else:
-        await ctx.send(f"{UNSUCCESSFUL_SPIN} Invalid unit! Use `m` (minutes), `h` (hours), or `d` (days).")
+    if seconds > 28 * 86400:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Discord timeouts cannot exceed 28 days.")
         return
+
+    delta = timedelta(seconds=seconds)
 
     dm_embed = discord.Embed(
         title=f"🔇 Muted in {ctx.guild.name}",
-        description=f"You have been muted for **{time_str}**.",
+        description=f"You have been muted for **{duration_str}**.",
         color=discord.Color.gold(),
         timestamp=discord.utils.utcnow()
     )
@@ -433,7 +437,7 @@ async def mute_prefix(ctx, member: discord.Member, duration_str: str, *, reason:
         await member.timeout(delta, reason=reason)
         embed = discord.Embed(
             title="🔇 Member Muted",
-            description=f"{SUCCESSFUL_SPIN} Muted {member.mention} for **{time_str}**.",
+            description=f"{SUCCESSFUL_SPIN} Muted {member.mention} for **{duration_str}**.",
             color=discord.Color.gold(),
             timestamp=discord.utils.utcnow()
         )
@@ -442,7 +446,7 @@ async def mute_prefix(ctx, member: discord.Member, duration_str: str, *, reason:
         embed.set_footer(text=f"Moderator: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
         await log_action(ctx.guild, "Manual Mute Executed",
-                         f"**User:** {member.mention}\n**Duration:** {time_str}\n**Reason:** {reason}\n**Moderator:** {ctx.author.mention}",
+                         f"**User:** {member.mention}\n**Duration:** {duration_str}\n**Reason:** {reason}\n**Moderator:** {ctx.author.mention}",
                          discord.Color.gold())
     except discord.Forbidden:
         await ctx.send(f"{UNSUCCESSFUL_SPIN} I lack permission to mute this member.")
@@ -797,21 +801,6 @@ async def embed(interaction: discord.Interaction):
 
 
 # --- Giveaway System ---
-
-def parse_duration(duration_str: str) -> int:
-    units = {
-        's': 1, 'sec': 1, 'second': 1, 'seconds': 1,
-        'm': 60, 'min': 60, 'minute': 60, 'minutes': 60,
-        'h': 3600, 'hr': 3600, 'hour': 3600, 'hours': 3600,
-        'd': 86400, 'day': 86400, 'days': 86400
-    }
-    match = re.match(r"^(\d+)\s*([a-zA-Z]+)$", duration_str.strip())
-    if not match:
-        return None
-    amount, unit = match.groups()
-    unit = unit.lower()
-    return int(amount) * units.get(unit, 0) if unit in units else None
-
 
 class GiveawayButton(discord.ui.View):
     def __init__(self, message_id: int):
