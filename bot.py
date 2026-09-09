@@ -187,6 +187,31 @@ async def apply_damage_and_punish(guild: discord.Guild, member: discord.Member, 
     return current_damage, punishment_text
 
 
+# --- Helper Function for Damage Embed Creation ---
+
+def create_damage_embed(action_type: str, member: discord.Member, points: int, current_damage: int, punishment: str,
+                        reason: str, moderator: discord.User) -> discord.Embed:
+    if action_type == "add":
+        title = "⚡ Damage Applied"
+        color = discord.Color.red() if current_damage >= 15 else discord.Color.orange()
+        action_text = f"{SUCCESSFUL_SPIN} Added **{points}** damage point(s) to {member.mention}."
+    else:
+        title = "🛡️ Damage Removed"
+        color = discord.Color.green()
+        action_text = f"{SUCCESSFUL_SPIN} Removed **{points}** damage point(s) from {member.mention}."
+
+    embed = discord.Embed(
+        title=title,
+        description=f"{action_text}\n\n**Total Damage:** `{current_damage}/25`\n**Status:** {punishment}",
+        color=color,
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text=f"Moderator: {moderator.display_name}", icon_url=moderator.display_avatar.url)
+    return embed
+
+
 # --- Event Listeners ---
 
 @bot.event
@@ -590,12 +615,8 @@ async def damage(interaction: discord.Interaction, member: discord.Member, point
     current_damage, punishment = await apply_damage_and_punish(interaction.guild, member, pts_to_add, reason,
                                                                interaction.user)
 
-    response_msg = (
-        f"{SUCCESSFUL_SPIN} Added **{pts_to_add}** damage point(s) for **{member.display_name}**.\n"
-        f"**Total Damage:** `{current_damage}/25`\n"
-        f"**Punishment Status:** {punishment}"
-    )
-    await interaction.response.send_message(response_msg)
+    embed = create_damage_embed("add", member, pts_to_add, current_damage, punishment, reason, interaction.user)
+    await interaction.response.send_message(embed=embed)
 
 
 @bot.command(name="damage")
@@ -608,12 +629,8 @@ async def damage_prefix(ctx, member: discord.Member, points: int, *, reason: str
     pts_to_add = abs(points)
     current_damage, punishment = await apply_damage_and_punish(ctx.guild, member, pts_to_add, reason, ctx.author)
 
-    response_msg = (
-        f"{SUCCESSFUL_SPIN} Added **{pts_to_add}** damage point(s) for **{member.display_name}**.\n"
-        f"**Total Damage:** `{current_damage}/25`\n"
-        f"**Punishment Status:** {punishment}"
-    )
-    await ctx.send(response_msg)
+    embed = create_damage_embed("add", member, pts_to_add, current_damage, punishment, reason, ctx.author)
+    await ctx.send(embed=embed)
 
 
 # --- Remove Damage Commands ---
@@ -631,12 +648,8 @@ async def removedamage(interaction: discord.Interaction, member: discord.Member,
     current_damage, punishment = await apply_damage_and_punish(interaction.guild, member, pts_to_remove, reason,
                                                                interaction.user)
 
-    response_msg = (
-        f"{SUCCESSFUL_SPIN} Removed **{abs(points)}** damage point(s) from **{member.display_name}**.\n"
-        f"**Total Damage:** `{current_damage}/25`\n"
-        f"**Status:** {punishment}"
-    )
-    await interaction.response.send_message(response_msg)
+    embed = create_damage_embed("remove", member, abs(points), current_damage, punishment, reason, interaction.user)
+    await interaction.response.send_message(embed=embed)
 
 
 @bot.command(name="removedamage")
@@ -649,12 +662,8 @@ async def removedamage_prefix(ctx, member: discord.Member, points: int, *, reaso
     pts_to_remove = -abs(points)
     current_damage, punishment = await apply_damage_and_punish(ctx.guild, member, pts_to_remove, reason, ctx.author)
 
-    response_msg = (
-        f"{SUCCESSFUL_SPIN} Removed **{abs(points)}** damage point(s) from **{member.display_name}**.\n"
-        f"**Total Damage:** `{current_damage}/25`\n"
-        f"**Status:** {punishment}"
-    )
-    await ctx.send(response_msg)
+    embed = create_damage_embed("remove", member, abs(points), current_damage, punishment, reason, ctx.author)
+    await ctx.send(embed=embed)
 
 
 # --- Damage Query & Warning Commands ---
@@ -663,7 +672,7 @@ async def removedamage_prefix(ctx, member: discord.Member, points: int, *, reaso
 async def checkdamage(interaction: discord.Interaction, member: discord.Member):
     key = (interaction.guild_id, member.id)
     pts = user_damage.get(key, 0)
-    embed = discord.Embed(title=f"Damage Report — {member.display_name}", description=f"**Current Damage:** {pts}/25",
+    embed = discord.Embed(title=f"Damage Report — {member.display_name}", description=f"**Current Damage:** `{pts}/25`",
                           color=discord.Color.red() if pts >= 15 else discord.Color.blue())
     embed.set_thumbnail(url=member.display_avatar.url)
     await interaction.response.send_message(embed=embed)
@@ -674,7 +683,7 @@ async def checkdamage_prefix(ctx, member: discord.Member = None):
     target = member or ctx.author
     key = (ctx.guild.id, target.id)
     pts = user_damage.get(key, 0)
-    embed = discord.Embed(title=f"Damage Report — {target.display_name}", description=f"**Current Damage:** {pts}/25",
+    embed = discord.Embed(title=f"Damage Report — {target.display_name}", description=f"**Current Damage:** `{pts}/25`",
                           color=discord.Color.red() if pts >= 15 else discord.Color.blue())
     embed.set_thumbnail(url=target.display_avatar.url)
     await ctx.send(embed=embed)
@@ -696,13 +705,9 @@ async def warn(interaction: discord.Interaction, member: discord.Member, points:
     current_damage, punishment = await apply_damage_and_punish(interaction.guild, member, points, reason,
                                                                interaction.user)
 
-    response_msg = (
-        f"{SUCCESSFUL_SPIN} Warned **{member.display_name}** (+{points} pts).\n"
-        f"**Reason:** {reason}\n"
-        f"**Total Damage:** `{current_damage}/25`\n"
-        f"**Punishment Status:** {punishment}"
-    )
-    await interaction.response.send_message(response_msg)
+    embed = create_damage_embed("add", member, points, current_damage, punishment, reason, interaction.user)
+    embed.title = "⚠️ User Warned"
+    await interaction.response.send_message(embed=embed)
 
 
 @bot.command(name="warn")
@@ -719,13 +724,9 @@ async def warn_prefix(ctx, member: discord.Member, points: int, *, reason: str =
 
     current_damage, punishment = await apply_damage_and_punish(ctx.guild, member, points, reason, ctx.author)
 
-    response_msg = (
-        f"{SUCCESSFUL_SPIN} Warned **{member.display_name}** (+{points} pts).\n"
-        f"**Reason:** {reason}\n"
-        f"**Total Damage:** `{current_damage}/25`\n"
-        f"**Punishment Status:** {punishment}"
-    )
-    await ctx.send(response_msg)
+    embed = create_damage_embed("add", member, points, current_damage, punishment, reason, ctx.author)
+    embed.title = "⚠️ User Warned"
+    await ctx.send(embed=embed)
 
 
 @bot.tree.command(name="warnings", description="View warnings and damage for a user")
@@ -740,7 +741,7 @@ async def warnings(interaction: discord.Interaction, member: discord.Member):
         return
 
     embed = discord.Embed(title=f"Warnings for {member.display_name}",
-                          description=f"**Total Damage:** {total_points}/25", color=discord.Color.blue())
+                          description=f"**Total Damage:** `{total_points}/25`", color=discord.Color.blue())
     for idx, w in enumerate(warns, 1):
         embed.add_field(name=f"Warning #{idx} ({w['points']} pts)",
                         value=f"**Reason:** {w['reason']}\n**Moderator:** {w['by']}", inline=False)
@@ -761,7 +762,7 @@ async def warnings_prefix(ctx, member: discord.Member = None):
         return
 
     embed = discord.Embed(title=f"Warnings for {target.display_name}",
-                          description=f"**Total Damage:** {total_points}/25", color=discord.Color.blue())
+                          description=f"**Total Damage:** `{total_points}/25`", color=discord.Color.blue())
     for idx, w in enumerate(warns, 1):
         embed.add_field(name=f"Warning #{idx} ({w['points']} pts)",
                         value=f"**Reason:** {w['reason']}\n**Moderator:** {w['by']}", inline=False)
@@ -783,8 +784,16 @@ async def clearwarnings(interaction: discord.Interaction, member: discord.Member
         except discord.Forbidden:
             pass
 
-    await interaction.response.send_message(
-        f"{SUCCESSFUL_SPIN} Cleared all damage points and warnings for **{member.display_name}**.")
+    embed = discord.Embed(
+        title="🧹 Warnings & Damage Cleared",
+        description=f"{SUCCESSFUL_SPIN} Cleared all damage points and warnings for {member.mention}.",
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text=f"Cleared by: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+
+    await interaction.response.send_message(embed=embed)
     await log_action(interaction.guild, "Warnings Cleared",
                      f"**User:** {member.mention}\n**Cleared By:** {interaction.user.mention}", discord.Color.green())
 
@@ -803,7 +812,16 @@ async def clearwarnings_prefix(ctx, member: discord.Member):
         except discord.Forbidden:
             pass
 
-    await ctx.send(f"{SUCCESSFUL_SPIN} Cleared all damage points and warnings for **{member.display_name}**.")
+    embed = discord.Embed(
+        title="🧹 Warnings & Damage Cleared",
+        description=f"{SUCCESSFUL_SPIN} Cleared all damage points and warnings for {member.mention}.",
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text=f"Cleared by: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+
+    await ctx.send(embed=embed)
     await log_action(ctx.guild, "Warnings Cleared", f"**User:** {member.mention}\n**Cleared By:** {ctx.author.mention}",
                      discord.Color.green())
 
