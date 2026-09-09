@@ -79,7 +79,20 @@ async def on_ready():
     await bot.tree.sync()
     print(f"Logged in as {bot.user} (ID: {bot.user.id}) - Active across {len(bot.guilds)} servers")
 
-# --- Event Listeners for Dynamic Per-Server Logging ---
+# --- Event Listeners for Dynamic Per-Server Logging & Unban Resets ---
+
+@bot.event
+async def on_member_unban(guild: discord.Guild, user: discord.User):
+    key = (guild.id, user.id)
+    if key in user_damage or key in user_warnings:
+        user_damage.pop(key, None)
+        user_warnings.pop(key, None)
+        await log_action(
+            guild,
+            "Damage Points Reset",
+            f"**User:** {user.mention} ({user.id})\n**Reason:** Automatically reset all damage points and warnings upon being unbanned.",
+            discord.Color.blue()
+        )
 
 @bot.event
 async def on_message_delete(message: discord.Message):
@@ -115,6 +128,39 @@ async def on_message_delete(message: discord.Message):
                 if message.attachments:
                     embed.set_footer(text=f"Attachment Name: {message.attachments[0].filename}")
                 await media_chan.send(embed=embed)
+
+# --- Speak / Say Slash Commands ---
+
+@bot.tree.command(name="say", description="Make the bot say a message in a specified channel")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def say(interaction: discord.Interaction, message: str, channel: discord.TextChannel = None):
+    target_channel = channel or interaction.channel
+    try:
+        await target_channel.send(message)
+        await interaction.response.send_message(
+            f"{SUCCESSFUL_SPIN} Message sent to {target_channel.mention}!",
+            ephemeral=True
+        )
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages in {target_channel.mention}.",
+            ephemeral=True
+        )
+
+@bot.tree.command(name="speak", description="Make the bot say a message in the current channel")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def speak(interaction: discord.Interaction, message: str):
+    try:
+        await interaction.channel.send(message)
+        await interaction.response.send_message(
+            f"{SUCCESSFUL_SPIN} Message sent!",
+            ephemeral=True
+        )
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages here.",
+            ephemeral=True
+        )
 
 # --- Embed Builder Modal & Commands ---
 
