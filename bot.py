@@ -105,13 +105,14 @@ async def on_message_delete(message: discord.Message):
                     embed.set_footer(text=f"Attachment Name: {message.attachments[0].filename}")
                 await media_chan.send(embed=embed)
 
-# --- Embed Builder Modal ---
+# --- Embed Builder Modal & Commands ---
 
 class EmbedModal(discord.ui.Modal, title="Create Custom Embed"):
-    def __init__(self, target_channel: discord.TextChannel):
-        super().__init__()
-        self.target_channel = target_channel
-
+    channel_mention_input = discord.ui.TextInput(
+        label="Channel (#channel or Channel ID)",
+        placeholder="Ex: #announcements or 1234567890 (leave blank for current)",
+        required=False
+    )
     embed_title = discord.ui.TextInput(
         label="Title",
         placeholder="Enter embed title...",
@@ -136,6 +137,18 @@ class EmbedModal(discord.ui.Modal, title="Create Custom Embed"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
+        # Resolve target channel from modal text input
+        target_channel = interaction.channel
+        channel_raw = self.channel_mention_input.value.strip()
+
+        if channel_raw:
+            # Extract numbers if passed as mention <#12345678> or raw ID string
+            cleaned_id = re.sub(r"\D", "", channel_raw)
+            if cleaned_id.isdigit():
+                found_channel = interaction.guild.get_channel(int(cleaned_id))
+                if found_channel and isinstance(found_channel, discord.TextChannel):
+                    target_channel = found_channel
+
         try:
             color_hex = self.embed_color.value.lstrip('#')
             color_int = int(color_hex, 16)
@@ -152,16 +165,21 @@ class EmbedModal(discord.ui.Modal, title="Create Custom Embed"):
             embed_obj.set_image(url=self.embed_image.value.strip())
 
         try:
-            await self.target_channel.send(embed=embed_obj)
+            await target_channel.send(embed=embed_obj)
             await interaction.response.send_message(
-                f"{SUCCESSFUL_SPIN} Embed successfully sent to {self.target_channel.mention}!",
+                f"{SUCCESSFUL_SPIN} Embed successfully sent to {target_channel.mention}!",
                 ephemeral=True
             )
         except discord.Forbidden:
             await interaction.response.send_message(
-                f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages in {self.target_channel.mention}.",
+                f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages in {target_channel.mention}.",
                 ephemeral=True
             )
+
+@bot.tree.command(name="embed", description="Opens the form to build and send a custom embed")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def embed(interaction: discord.Interaction):
+    await interaction.response.send_modal(EmbedModal())
 
 # --- Giveaway Management System ---
 
@@ -479,12 +497,6 @@ async def setlogchannel(interaction: discord.Interaction, log_type: app_commands
     elif log_type.value == "media":
         logging_config["media_log_channel"] = channel.id
         await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Media logging channel set to {channel.mention}.")
-
-@bot.tree.command(name="embed", description="Create and send a custom embed via interactive modal")
-@app_commands.checks.has_permissions(manage_messages=True)
-async def embed(interaction: discord.Interaction, channel: discord.TextChannel = None):
-    target_channel = channel or interaction.channel
-    await interaction.response.send_modal(EmbedModal(target_channel=target_channel))
 
 @bot.tree.command(name="poll", description="Create a simple reaction poll")
 @app_commands.checks.has_permissions(manage_messages=True)
