@@ -71,38 +71,6 @@ user_damage = {}  # (guild_id, user_id) -> total damage points
 user_warnings = {}  # (guild_id, user_id) -> list of warning dicts
 active_giveaways = {}  # message_id -> giveaway data dict
 
-# --- Response Configuration ---
-PINGS = [
-    "hi", "hello", "hey", "What's up"
-]
-
-HOW_ARE_YOU_RESPONSES = [
-    "i'm good!",
-    "doing well, thanks for asking!",
-    "chilling, just running code.",
-    "can't complain, no error logs today.",
-    "all good over here!"
-]
-
-IDENTITY_RESPONSES = [
-    "I'm Jonathan!",
-    "My name is Jonathan.",
-    "Jonathan at your service.",
-    "I'm Jonathan, the bot running this server."
-]
-
-HOW_ARE_YOU_KEYWORDS = [
-    "how are you", "hru", "how r u", "how r you",
-    "hows it going", "how's it going", "how you doing",
-    "how u doing", "how you doin", "how u doin"
-]
-
-IDENTITY_KEYWORDS = [
-    "who are you", "who r u", "who r you", "whats your name",
-    "what's your name", "what is your name", "who tf are you",
-    "who dis", "who is this"
-]
-
 # --- Persistent JSON Storage for Damage & Warnings ---
 DATA_FILE = "damage_data.json"
 
@@ -280,39 +248,7 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    content_lower = message.content.lower().strip()
-
-    # Check if the bot was pinged OR if this is a reply to the bot
-    is_reply_to_bot = (
-        message.reference
-        and message.reference.resolved
-        and isinstance(message.reference.resolved, discord.Message)
-        and message.reference.resolved.author == bot.user
-    )
-    is_pinged = bot.user in message.mentions
-
-    if is_reply_to_bot or is_pinged:
-        # Show "Jonathan is typing..." during a 1-2 second delay
-        async with message.channel.typing():
-            await asyncio.sleep(random.uniform(1.0, 2.0))
-
-        # Check Identity Keywords First
-        if any(keyword in content_lower for keyword in IDENTITY_KEYWORDS):
-            await message.channel.send(f"{message.author.mention} {random.choice(IDENTITY_RESPONSES)}")
-            await bot.process_commands(message)
-            return
-
-        # Check How Are You Keywords First
-        if any(keyword in content_lower for keyword in HOW_ARE_YOU_KEYWORDS):
-            await message.channel.send(f"{message.author.mention} {random.choice(HOW_ARE_YOU_RESPONSES)}")
-            await bot.process_commands(message)
-            return
-
-        # Simple Standalone Ping
-        await message.channel.send(f"{message.author.mention} {random.choice(PINGS)}")
-        await bot.process_commands(message)
-        return
-
+    # Process standard text commands only
     await bot.process_commands(message)
 
 
@@ -381,6 +317,52 @@ async def on_message_delete(message: discord.Message):
                     timestamp=discord.utils.utcnow()
                 )
                 await media_chan.send(embed=embed)
+
+
+# --- Direct Message Commands ---
+
+@bot.tree.command(name="dm", description="Send a direct message to a user through the bot")
+@app_commands.checks.has_permissions(administrator=True)
+async def dm_user(interaction: discord.Interaction, user: discord.User, message: str):
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        embed = discord.Embed(
+            title=f"Message from {interaction.guild.name}",
+            description=message,
+            color=discord.Color.blue(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_footer(text=f"Sent by {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+
+        await user.send(embed=embed)
+        await interaction.followup.send(f"{SUCCESSFUL_SPIN} Successfully sent DM to {user.mention}.", ephemeral=True)
+
+    except discord.Forbidden:
+        await interaction.followup.send(
+            f"{UNSUCCESSFUL_SPIN} Could not send DM to {user.mention}. They may have DMs disabled or blocked the bot.",
+            ephemeral=True
+        )
+    except Exception as e:
+        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} An error occurred: {e}", ephemeral=True)
+
+
+@bot.command(name="dm")
+@commands.has_permissions(administrator=True)
+async def dm_user_prefix(ctx, user: discord.User, *, message: str):
+    try:
+        embed = discord.Embed(
+            title=f"Message from {ctx.guild.name}",
+            description=message,
+            color=discord.Color.blue(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_footer(text=f"Sent by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+
+        await user.send(embed=embed)
+        await ctx.send(f"{SUCCESSFUL_SPIN} Successfully sent DM to {user.mention}.")
+    except discord.Forbidden:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Could not send DM to {user.mention}. Their DMs may be closed.")
 
 
 # --- Dynamic Prefix Command ---
@@ -1130,10 +1112,9 @@ async def checkdamage_prefix(ctx, member: discord.Member = None):
     await ctx.send(embed=embed)
 
 
-@bot.tree.command(name="warn", description="Warn a user and apply damage points")
+@bot.tree.command(name="warn", description="Warn a user")
 @app_commands.checks.has_permissions(kick_members=True)
-async def warn(interaction: discord.Interaction, member: discord.Member, points: int,
-               reason: str = "No reason provided"):
+async def warn(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
     if member.bot:
         await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot warn bots.", ephemeral=True)
         return
@@ -1141,14 +1122,13 @@ async def warn(interaction: discord.Interaction, member: discord.Member, points:
     key = (interaction.guild_id, member.id)
     if key not in user_warnings:
         user_warnings[key] = []
-    user_warnings[key].append({"points": points, "reason": reason, "by": interaction.user.display_name})
 
-    current_damage, punishment = await apply_damage_and_punish(interaction.guild, member, points, reason,
-                                                               interaction.user)
+    user_warnings[key].append({"reason": reason, "by": interaction.user.display_name})
+    save_data()
 
     dm_embed = discord.Embed(
         title=f"⚠️ Warning Received in {interaction.guild.name}",
-        description=f"You received **+{points} damage points**.\n**Total Damage:** `{current_damage}/25`",
+        description=f"You have received an official warning.",
         color=discord.Color.orange(),
         timestamp=discord.utils.utcnow()
     )
@@ -1156,14 +1136,28 @@ async def warn(interaction: discord.Interaction, member: discord.Member, points:
     dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
     await send_user_dm(member, dm_embed)
 
-    embed = create_damage_embed("add", member, points, current_damage, punishment, reason, interaction.user)
-    embed.title = "⚠️ User Warned"
+    embed = discord.Embed(
+        title="⚠️ User Warned",
+        description=f"{SUCCESSFUL_SPIN} Successfully issued a warning to {member.mention}.",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text=f"Moderator: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+
     await interaction.response.send_message(embed=embed)
+    await log_action(
+        interaction.guild,
+        "User Warned",
+        f"**User:** {member.mention} ({member.id})\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
+        discord.Color.orange()
+    )
 
 
 @bot.command(name="warn")
 @commands.has_permissions(kick_members=True)
-async def warn_prefix(ctx, member: discord.Member, points: int, *, reason: str = "No reason provided"):
+async def warn_prefix(ctx, member: discord.Member, *, reason: str = "No reason provided"):
     if member.bot:
         await ctx.send(f"{UNSUCCESSFUL_SPIN} You cannot warn bots.")
         return
@@ -1171,13 +1165,13 @@ async def warn_prefix(ctx, member: discord.Member, points: int, *, reason: str =
     key = (ctx.guild.id, member.id)
     if key not in user_warnings:
         user_warnings[key] = []
-    user_warnings[key].append({"points": points, "reason": reason, "by": ctx.author.display_name})
 
-    current_damage, punishment = await apply_damage_and_punish(ctx.guild, member, points, reason, ctx.author)
+    user_warnings[key].append({"reason": reason, "by": ctx.author.display_name})
+    save_data()
 
     dm_embed = discord.Embed(
         title=f"⚠️ Warning Received in {ctx.guild.name}",
-        description=f"You received **+{points} damage points**.\n**Total Damage:** `{current_damage}/25`",
+        description=f"You have received an official warning.",
         color=discord.Color.orange(),
         timestamp=discord.utils.utcnow()
     )
@@ -1185,12 +1179,26 @@ async def warn_prefix(ctx, member: discord.Member, points: int, *, reason: str =
     dm_embed.set_footer(text=f"Moderator: {ctx.author.display_name}")
     await send_user_dm(member, dm_embed)
 
-    embed = create_damage_embed("add", member, points, current_damage, punishment, reason, ctx.author)
-    embed.title = "⚠️ User Warned"
+    embed = discord.Embed(
+        title="⚠️ User Warned",
+        description=f"{SUCCESSFUL_SPIN} Successfully issued a warning to {member.mention}.",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text=f"Moderator: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+
     await ctx.send(embed=embed)
+    await log_action(
+        ctx.guild,
+        "User Warned",
+        f"**User:** {member.mention} ({member.id})\n**Reason:** {reason}\n**Moderator:** {ctx.author.mention}",
+        discord.Color.orange()
+    )
 
 
-@bot.tree.command(name="warnings", description="View warnings and damage for a user")
+@bot.tree.command(name="warnings", description="View warnings for a user")
 async def warnings(interaction: discord.Interaction, member: discord.Member):
     key = (interaction.guild_id, member.id)
     total_points = user_damage.get(key, 0)
@@ -1198,13 +1206,13 @@ async def warnings(interaction: discord.Interaction, member: discord.Member):
 
     if not warns:
         await interaction.response.send_message(
-            f"{SUCCESSFUL_SPIN} **{member.display_name}** has no recorded warnings or damage points in this server.")
+            f"{SUCCESSFUL_SPIN} **{member.display_name}** has no recorded warnings in this server.")
         return
 
     embed = discord.Embed(title=f"Warnings for {member.display_name}",
-                          description=f"**Total Damage:** `{total_points}/25`", color=discord.Color.blue())
+                          description=f"**Current Damage:** `{total_points}/25`", color=discord.Color.blue())
     for idx, w in enumerate(warns, 1):
-        embed.add_field(name=f"Warning #{idx} ({w['points']} pts)",
+        embed.add_field(name=f"Warning #{idx}",
                         value=f"**Reason:** {w['reason']}\n**Moderator:** {w['by']}", inline=False)
 
     await interaction.response.send_message(embed=embed)
@@ -1219,13 +1227,13 @@ async def warnings_prefix(ctx, member: discord.Member = None):
 
     if not warns:
         await ctx.send(
-            f"{SUCCESSFUL_SPIN} **{target.display_name}** has no recorded warnings or damage points in this server.")
+            f"{SUCCESSFUL_SPIN} **{target.display_name}** has no recorded warnings in this server.")
         return
 
     embed = discord.Embed(title=f"Warnings for {target.display_name}",
-                          description=f"**Total Damage:** `{total_points}/25`", color=discord.Color.blue())
+                          description=f"**Current Damage:** `{total_points}/25`", color=discord.Color.blue())
     for idx, w in enumerate(warns, 1):
-        embed.add_field(name=f"Warning #{idx} ({w['points']} pts)",
+        embed.add_field(name=f"Warning #{idx}",
                         value=f"**Reason:** {w['reason']}\n**Moderator:** {w['by']}", inline=False)
 
     await ctx.send(embed=embed)
