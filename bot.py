@@ -248,7 +248,6 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # Process standard text commands only
     await bot.process_commands(message)
 
 
@@ -319,7 +318,250 @@ async def on_message_delete(message: discord.Message):
                 await media_chan.send(embed=embed)
 
 
-# --- Direct Message Commands (Plain Text) ---
+# --- Info Commands (userinfo & serverinfo) ---
+
+@bot.tree.command(name="userinfo", description="Display detailed information about a member")
+async def userinfo(interaction: discord.Interaction, member: discord.Member = None):
+    target = member or interaction.user
+    roles = [role.mention for role in reversed(target.roles) if role != interaction.guild.default_role]
+    roles_str = ", ".join(roles) if roles else "None"
+
+    embed = discord.Embed(
+        title=f"User Info — {target.display_name}",
+        color=target.color if target.color != discord.Color.default() else discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_thumbnail(url=target.display_avatar.url)
+    embed.add_field(name="Username", value=f"`{target.name}`", inline=True)
+    embed.add_field(name="User ID", value=f"`{target.id}`", inline=True)
+    embed.add_field(name="Account Created", value=f"<t:{int(target.created_at.timestamp())}:R>", inline=False)
+    embed.add_field(name="Joined Server", value=f"<t:{int(target.joined_at.timestamp())}:R>", inline=False)
+    embed.add_field(name=f"Roles ({len(roles)})", value=roles_str, inline=False)
+
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.command(name="userinfo")
+async def userinfo_prefix(ctx, member: discord.Member = None):
+    target = member or ctx.author
+    roles = [role.mention for role in reversed(target.roles) if role != ctx.guild.default_role]
+    roles_str = ", ".join(roles) if roles else "None"
+
+    embed = discord.Embed(
+        title=f"User Info — {target.display_name}",
+        color=target.color if target.color != discord.Color.default() else discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_thumbnail(url=target.display_avatar.url)
+    embed.add_field(name="Username", value=f"`{target.name}`", inline=True)
+    embed.add_field(name="User ID", value=f"`{target.id}`", inline=True)
+    embed.add_field(name="Account Created", value=f"<t:{int(target.created_at.timestamp())}:R>", inline=False)
+    embed.add_field(name="Joined Server", value=f"<t:{int(target.joined_at.timestamp())}:R>", inline=False)
+    embed.add_field(name=f"Roles ({len(roles)})", value=roles_str, inline=False)
+
+    await ctx.send(embed=embed)
+
+
+@bot.tree.command(name="serverinfo", description="Display detailed information about this server")
+async def serverinfo(interaction: discord.Interaction):
+    guild = interaction.guild
+    text_channels = len(guild.text_channels)
+    voice_channels = len(guild.voice_channels)
+    categories = len(guild.categories)
+    bots = sum(1 for m in guild.members if m.bot)
+    humans = guild.member_count - bots
+
+    embed = discord.Embed(
+        title=f"Server Info — {guild.name}",
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+
+    embed.add_field(name="Owner", value=f"{guild.owner.mention} (`{guild.owner.id}`)", inline=False)
+    embed.add_field(name="Server ID", value=f"`{guild.id}`", inline=True)
+    embed.add_field(name="Created On", value=f"<t:{int(guild.created_at.timestamp())}:R>", inline=True)
+    embed.add_field(
+        name="Members",
+        value=f"Total: **{guild.member_count}**\nHumans: **{humans}**\nBots: **{bots}**",
+        inline=True
+    )
+    embed.add_field(
+        name="Channels",
+        value=f"Text: **{text_channels}**\nVoice: **{voice_channels}**\nCategories: **{categories}**",
+        inline=True
+    )
+    embed.add_field(name="Roles", value=f"**{len(guild.roles)}** roles", inline=True)
+    embed.add_field(name="Boost Level", value=f"Tier **{guild.premium_tier}** ({guild.premium_subscription_count} boosts)", inline=True)
+
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.command(name="serverinfo")
+async def serverinfo_prefix(ctx):
+    guild = ctx.guild
+    text_channels = len(guild.text_channels)
+    voice_channels = len(guild.voice_channels)
+    categories = len(guild.categories)
+    bots = sum(1 for m in guild.members if m.bot)
+    humans = guild.member_count - bots
+
+    embed = discord.Embed(
+        title=f"Server Info — {guild.name}",
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+
+    embed.add_field(name="Owner", value=f"{guild.owner.mention} (`{guild.owner.id}`)", inline=False)
+    embed.add_field(name="Server ID", value=f"`{guild.id}`", inline=True)
+    embed.add_field(name="Created On", value=f"<t:{int(guild.created_at.timestamp())}:R>", inline=True)
+    embed.add_field(
+        name="Members",
+        value=f"Total: **{guild.member_count}**\nHumans: **{humans}**\nBots: **{bots}**",
+        inline=True
+    )
+    embed.add_field(
+        name="Channels",
+        value=f"Text: **{text_channels}**\nVoice: **{voice_channels}**\nCategories: **{categories}**",
+        inline=True
+    )
+    embed.add_field(name="Roles", value=f"**{len(guild.roles)}** roles", inline=True)
+    embed.add_field(name="Boost Level", value=f"Tier **{guild.premium_tier}** ({guild.premium_subscription_count} boosts)", inline=True)
+
+    await ctx.send(embed=embed)
+
+
+# --- Purge Suite (purge, purge-human, purge-bot) ---
+
+@bot.tree.command(name="purge", description="Bulk delete messages in the current channel")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def purge(interaction: discord.Interaction, amount: int, user: discord.Member = None):
+    if amount < 1 or amount > 100:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    def check(m):
+        return m.author == user if user else True
+
+    deleted = await interaction.channel.purge(limit=amount, check=check)
+    await interaction.followup.send(f"{SUCCESSFUL_SPIN} Deleted **{len(deleted)}** message(s).", ephemeral=True)
+    await log_action(
+        interaction.guild,
+        "Messages Purged",
+        f"**Channel:** {interaction.channel.mention}\n**Count:** {len(deleted)}\n**Target Filter:** {user.mention if user else 'All'}\n**Moderator:** {interaction.user.mention}",
+        discord.Color.red()
+    )
+
+
+@bot.command(name="purge")
+@commands.has_permissions(manage_messages=True)
+async def purge_prefix(ctx, amount: int, user: discord.Member = None):
+    if amount < 1 or amount > 100:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.")
+        return
+
+    await ctx.message.delete()
+
+    def check(m):
+        return m.author == user if user else True
+
+    deleted = await ctx.channel.purge(limit=amount, check=check)
+    msg = await ctx.send(f"{SUCCESSFUL_SPIN} Deleted **{len(deleted)}** message(s).")
+    await asyncio.sleep(3)
+    await msg.delete()
+
+    await log_action(
+        ctx.guild,
+        "Messages Purged",
+        f"**Channel:** {ctx.channel.mention}\n**Count:** {len(deleted)}\n**Target Filter:** {user.mention if user else 'All'}\n**Moderator:** {ctx.author.mention}",
+        discord.Color.red()
+    )
+
+
+@bot.tree.command(name="purge-human", description="Bulk delete messages sent only by humans")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def purge_human(interaction: discord.Interaction, amount: int):
+    if amount < 1 or amount > 100:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    deleted = await interaction.channel.purge(limit=amount, check=lambda m: not m.author.bot)
+    await interaction.followup.send(f"{SUCCESSFUL_SPIN} Deleted **{len(deleted)}** human message(s).", ephemeral=True)
+    await log_action(
+        interaction.guild,
+        "Human Messages Purged",
+        f"**Channel:** {interaction.channel.mention}\n**Count:** {len(deleted)}\n**Moderator:** {interaction.user.mention}",
+        discord.Color.red()
+    )
+
+
+@bot.command(name="purge-human", aliases=["purgehuman"])
+@commands.has_permissions(manage_messages=True)
+async def purge_human_prefix(ctx, amount: int):
+    if amount < 1 or amount > 100:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.")
+        return
+
+    await ctx.message.delete()
+    deleted = await ctx.channel.purge(limit=amount, check=lambda m: not m.author.bot)
+    msg = await ctx.send(f"{SUCCESSFUL_SPIN} Deleted **{len(deleted)}** human message(s).")
+    await asyncio.sleep(3)
+    await msg.delete()
+
+    await log_action(
+        ctx.guild,
+        "Human Messages Purged",
+        f"**Channel:** {ctx.channel.mention}\n**Count:** {len(deleted)}\n**Moderator:** {ctx.author.mention}",
+        discord.Color.red()
+    )
+
+
+@bot.tree.command(name="purge-bot", description="Bulk delete messages sent only by bots")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def purge_bot(interaction: discord.Interaction, amount: int):
+    if amount < 1 or amount > 100:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    deleted = await interaction.channel.purge(limit=amount, check=lambda m: m.author.bot)
+    await interaction.followup.send(f"{SUCCESSFUL_SPIN} Deleted **{len(deleted)}** bot message(s).", ephemeral=True)
+    await log_action(
+        interaction.guild,
+        "Bot Messages Purged",
+        f"**Channel:** {interaction.channel.mention}\n**Count:** {len(deleted)}\n**Moderator:** {interaction.user.mention}",
+        discord.Color.red()
+    )
+
+
+@bot.command(name="purge-bot", aliases=["purgebot"])
+@commands.has_permissions(manage_messages=True)
+async def purge_bot_prefix(ctx, amount: int):
+    if amount < 1 or amount > 100:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.")
+        return
+
+    await ctx.message.delete()
+    deleted = await ctx.channel.purge(limit=amount, check=lambda m: m.author.bot)
+    msg = await ctx.send(f"{SUCCESSFUL_SPIN} Deleted **{len(deleted)}** bot message(s).")
+    await asyncio.sleep(3)
+    await msg.delete()
+
+    await log_action(
+        ctx.guild,
+        "Bot Messages Purged",
+        f"**Channel:** {ctx.channel.mention}\n**Count:** {len(deleted)}\n**Moderator:** {ctx.author.mention}",
+        discord.Color.red()
+    )
+
+
+# --- Direct Message Commands ---
 
 @bot.tree.command(name="dm", description="Send a direct message to a user through the bot")
 @app_commands.checks.has_permissions(administrator=True)
@@ -382,7 +624,7 @@ def parse_duration(duration_str: str) -> int:
     return int(amount) * units.get(unit, 0) if unit in units else None
 
 
-# --- Manual Moderation Commands (Mute, Unmute, Ban, Unban) ---
+# --- Manual Moderation Commands ---
 
 @bot.tree.command(name="mute", description="Mute (timeout) a member manually")
 @app_commands.checks.has_permissions(moderate_members=True)
@@ -839,6 +1081,21 @@ async def embed(interaction: discord.Interaction):
     await interaction.response.send_modal(EmbedModal())
 
 
+@bot.command(name="embed")
+@commands.has_permissions(manage_messages=True)
+async def embed_prefix(ctx, title: str, *, description: str):
+    embed_obj = discord.Embed(
+        title=title,
+        description=description,
+        color=discord.Color.blue()
+    )
+    try:
+        await ctx.send(embed=embed_obj)
+        await ctx.message.delete()
+    except discord.Forbidden:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} I don't have permission to send embeds here.")
+
+
 # --- Giveaway System ---
 
 class GiveawayButton(discord.ui.View):
@@ -991,6 +1248,63 @@ async def giveaway(interaction: discord.Interaction):
     await interaction.response.send_modal(GiveawayModal())
 
 
+@bot.command(name="giveaway")
+@commands.has_permissions(administrator=True)
+async def giveaway_prefix(ctx, duration_str: str, winners: int, *, prize: str):
+    seconds = parse_duration(duration_str)
+    if not seconds or seconds <= 0:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Invalid duration format! Use e.g. `10m`, `2h`, or `1d`.")
+        return
+
+    if winners < 1:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Winners must be a positive number.")
+        return
+
+    end_timestamp = int(time.time() + seconds)
+    view = GiveawayButton(0)
+
+    def build_embed():
+        return discord.Embed(
+            title=f"**{prize}**",
+            description=(
+                f"Ends: <t:{end_timestamp}:R> (<t:{end_timestamp}:f>)\n"
+                f"Hosted by: {ctx.author.mention} (`@{ctx.author.name}`)\n"
+                f"Entries: **{len(view.entries)}**\n"
+                f"Winners: **{winners}**"
+            ),
+            color=discord.Color.blue(),
+            timestamp=discord.utils.utcnow()
+        )
+
+    msg = await ctx.send(embed=build_embed(), view=view)
+    view.message_id = msg.id
+
+    active_giveaways[msg.id] = {
+        "msg": msg,
+        "guild_id": ctx.guild.id,
+        "channel_id": ctx.channel.id,
+        "prize": prize,
+        "host": ctx.author,
+        "end_timestamp": end_timestamp,
+        "winner_count": winners,
+        "view": view,
+        "active": True
+    }
+
+    start_time = time.time()
+    while time.time() - start_time < seconds:
+        await asyncio.sleep(5)
+        if msg.id not in active_giveaways or not active_giveaways[msg.id]["active"]:
+            return
+        try:
+            await msg.edit(embed=build_embed(), view=view)
+        except discord.HTTPException:
+            break
+
+    if msg.id in active_giveaways and active_giveaways[msg.id]["active"]:
+        await finalize_giveaway(msg.id, ctx.guild)
+
+
 # --- Logging Channel Configuration ---
 
 @bot.tree.command(name="setlogchannel", description="Set dynamic logging channels for messages, media, or general logs")
@@ -1005,6 +1319,26 @@ async def setlogchannel(interaction: discord.Interaction, log_type: app_commands
     config = get_server_config(interaction.guild_id)
     config[f"{log_type.value}_log_channel" if log_type.value != "general" else "log_channel"] = channel.id
     await interaction.response.send_message(f"{SUCCESSFUL_SPIN} {log_type.name} set to {channel.mention}.")
+
+
+@bot.command(name="setlogchannel")
+@commands.has_permissions(administrator=True)
+async def setlogchannel_prefix(ctx, log_type: str, channel: discord.TextChannel):
+    valid_types = {
+        "general": ("log_channel", "General Audit Logs"),
+        "msg": ("msg_log_channel", "Message Logs (Deleted Messages)"),
+        "media": ("media_log_channel", "Media Logs (Images/GIFs)")
+    }
+
+    clean_type = log_type.lower().strip()
+    if clean_type not in valid_types:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Invalid log type! Choose from: `general`, `msg`, or `media`.")
+        return
+
+    key, display_name = valid_types[clean_type]
+    config = get_server_config(ctx.guild.id)
+    config[key] = channel.id
+    await ctx.send(f"{SUCCESSFUL_SPIN} {display_name} set to {channel.mention}.")
 
 
 # --- Add Damage Commands ---
