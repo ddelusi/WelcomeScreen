@@ -319,7 +319,7 @@ async def on_message_delete(message: discord.Message):
                 await media_chan.send(embed=embed)
 
 
-# --- Direct Message Commands ---
+# --- Direct Message Commands (Plain Text) ---
 
 @bot.tree.command(name="dm", description="Send a direct message to a user through the bot")
 @app_commands.checks.has_permissions(administrator=True)
@@ -327,15 +327,8 @@ async def dm_user(interaction: discord.Interaction, user: discord.User, message:
     await interaction.response.defer(ephemeral=True)
 
     try:
-        embed = discord.Embed(
-            title=f"Message from {interaction.guild.name}",
-            description=message,
-            color=discord.Color.blue(),
-            timestamp=discord.utils.utcnow()
-        )
-        embed.set_footer(text=f"Sent by {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
-
-        await user.send(embed=embed)
+        text_content = f"**Message from {interaction.guild.name}:**\n{message}"
+        await user.send(text_content)
         await interaction.followup.send(f"{SUCCESSFUL_SPIN} Successfully sent DM to {user.mention}.", ephemeral=True)
 
     except discord.Forbidden:
@@ -351,15 +344,8 @@ async def dm_user(interaction: discord.Interaction, user: discord.User, message:
 @commands.has_permissions(administrator=True)
 async def dm_user_prefix(ctx, user: discord.User, *, message: str):
     try:
-        embed = discord.Embed(
-            title=f"Message from {ctx.guild.name}",
-            description=message,
-            color=discord.Color.blue(),
-            timestamp=discord.utils.utcnow()
-        )
-        embed.set_footer(text=f"Sent by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
-
-        await user.send(embed=embed)
+        text_content = f"**Message from {ctx.guild.name}:**\n{message}"
+        await user.send(text_content)
         await ctx.send(f"{SUCCESSFUL_SPIN} Successfully sent DM to {user.mention}.")
     except discord.Forbidden:
         await ctx.send(f"{UNSUCCESSFUL_SPIN} Could not send DM to {user.mention}. Their DMs may be closed.")
