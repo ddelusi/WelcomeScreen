@@ -292,6 +292,10 @@ async def on_message(message: discord.Message):
     is_pinged = bot.user in message.mentions
 
     if is_reply_to_bot or is_pinged:
+        # Show "Jonathan is typing..." during a 1-2 second delay
+        async with message.channel.typing():
+            await asyncio.sleep(random.uniform(1.0, 2.0))
+
         # Check Identity Keywords First
         if any(keyword in content_lower for keyword in IDENTITY_KEYWORDS):
             await message.channel.send(f"{message.author.mention} {random.choice(IDENTITY_RESPONSES)}")
@@ -304,7 +308,7 @@ async def on_message(message: discord.Message):
             await bot.process_commands(message)
             return
 
-        # Simple Standalone Ping (only if no specific question matched)
+        # Simple Standalone Ping
         await message.channel.send(f"{message.author.mention} {random.choice(PINGS)}")
         await bot.process_commands(message)
         return
