@@ -79,7 +79,19 @@ async def on_ready():
     await bot.tree.sync()
     print(f"Logged in as {bot.user} (ID: {bot.user.id}) - Active across {len(bot.guilds)} servers")
 
-# --- Event Listeners for Dynamic Per-Server Logging & Unban Resets ---
+# --- Event Listeners for Dynamic Per-Server Logging, Ping Response & Unban Resets ---
+
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
+    # Check if the bot was pinged/mentioned
+    if bot.user in message.mentions:
+        greeting = random.choice(["hi", "hello", "hey", "no"])
+        await message.channel.send(f"{greeting} {message.author.mention}")
+
+    await bot.process_commands(message)
 
 @bot.event
 async def on_member_unban(guild: discord.Guild, user: discord.User):
