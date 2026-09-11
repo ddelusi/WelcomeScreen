@@ -47,7 +47,7 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 server_prefixes = {}  # guild_id -> custom prefix string
-DM_LOG_CHANNEL_ID = 1494367513658527865  # Target channel for bot DM logs
+DM_LOG_CHANNEL_ID = 1547782664642371685  # Target channel for bot DM logs
 
 
 def get_prefix(bot, message):
