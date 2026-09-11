@@ -71,6 +71,7 @@ server_configs = {}
 user_damage = {}  # (guild_id, user_id) -> total damage points
 user_warnings = {}  # (guild_id, user_id) -> list of warning dicts
 active_giveaways = {}  # message_id -> giveaway data dict
+seen_dm_users = set()  # Tracks users who received the one-time DM notice
 
 # --- Persistent JSON Storage for Damage & Warnings ---
 DATA_FILE = "damage_data.json"
@@ -251,6 +252,20 @@ async def on_message(message: discord.Message):
 
     # Check if the message is sent directly to the bot in a DM
     if isinstance(message.channel, discord.DMChannel):
+        # Send a one-time disclaimer notice to first-time DMers
+        if message.author.id not in seen_dm_users:
+            seen_dm_users.add(message.author.id)
+            notice_embed = discord.Embed(
+                title="ℹ️ Notice",
+                description="Please note that messages sent to this bot's Direct Messages are monitored by staff. Standard server rules still apply in DMs.",
+                color=discord.Color.blue()
+            )
+            try:
+                await message.author.send(embed=notice_embed)
+            except discord.Forbidden:
+                pass
+
+        # Forward the DM to your log channel
         log_channel = bot.get_channel(DM_LOG_CHANNEL_ID)
 
         if log_channel:
