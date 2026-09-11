@@ -47,6 +47,7 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 server_prefixes = {}  # guild_id -> custom prefix string
+DM_LOG_CHANNEL_ID = 1494367513658527865  # Target channel for bot DM logs
 
 
 def get_prefix(bot, message):
@@ -248,6 +249,28 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
+    # Check if the message is sent directly to the bot in a DM
+    if isinstance(message.channel, discord.DMChannel):
+        log_channel = bot.get_channel(DM_LOG_CHANNEL_ID)
+
+        if log_channel:
+            embed = discord.Embed(
+                title="📩 New Direct Message Received",
+                description=message.content if message.content else "*[No text content]*",
+                color=discord.Color.purple(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed.set_author(
+                name=f"{message.author.name} ({message.author.id})",
+                icon_url=message.author.display_avatar.url
+            )
+
+            if message.attachments:
+                attachment_urls = "\n".join([att.url for att in message.attachments])
+                embed.add_field(name="Attachments", value=attachment_urls, inline=False)
+
+            await log_channel.send(embed=embed)
+
     await bot.process_commands(message)
 
 
@@ -393,7 +416,8 @@ async def serverinfo(interaction: discord.Interaction):
         inline=True
     )
     embed.add_field(name="Roles", value=f"**{len(guild.roles)}** roles", inline=True)
-    embed.add_field(name="Boost Level", value=f"Tier **{guild.premium_tier}** ({guild.premium_subscription_count} boosts)", inline=True)
+    embed.add_field(name="Boost Level",
+                    value=f"Tier **{guild.premium_tier}** ({guild.premium_subscription_count} boosts)", inline=True)
 
     await interaction.response.send_message(embed=embed)
 
@@ -429,7 +453,8 @@ async def serverinfo_prefix(ctx):
         inline=True
     )
     embed.add_field(name="Roles", value=f"**{len(guild.roles)}** roles", inline=True)
-    embed.add_field(name="Boost Level", value=f"Tier **{guild.premium_tier}** ({guild.premium_subscription_count} boosts)", inline=True)
+    embed.add_field(name="Boost Level",
+                    value=f"Tier **{guild.premium_tier}** ({guild.premium_subscription_count} boosts)", inline=True)
 
     await ctx.send(embed=embed)
 
@@ -440,7 +465,8 @@ async def serverinfo_prefix(ctx):
 @app_commands.checks.has_permissions(manage_messages=True)
 async def purge(interaction: discord.Interaction, amount: int, user: discord.Member = None):
     if amount < 1 or amount > 100:
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.", ephemeral=True)
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.",
+                                                ephemeral=True)
         return
 
     await interaction.response.defer(ephemeral=True)
@@ -487,7 +513,8 @@ async def purge_prefix(ctx, amount: int, user: discord.Member = None):
 @app_commands.checks.has_permissions(manage_messages=True)
 async def purge_human(interaction: discord.Interaction, amount: int):
     if amount < 1 or amount > 100:
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.", ephemeral=True)
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.",
+                                                ephemeral=True)
         return
 
     await interaction.response.defer(ephemeral=True)
@@ -526,7 +553,8 @@ async def purge_human_prefix(ctx, amount: int):
 @app_commands.checks.has_permissions(manage_messages=True)
 async def purge_bot(interaction: discord.Interaction, amount: int):
     if amount < 1 or amount > 100:
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.", ephemeral=True)
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.",
+                                                ephemeral=True)
         return
 
     await interaction.response.defer(ephemeral=True)
