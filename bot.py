@@ -6,7 +6,7 @@ import time
 import asyncio
 import random
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 import aiohttp
 import discord
 from discord import app_commands
@@ -47,6 +47,7 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 server_prefixes = {}  # guild_id -> custom prefix string
+DM_LOG_CHANNEL_ID = 1547782664642371685  # Target channel for bot DM logs
 
 
 def get_prefix(bot, message):
@@ -70,6 +71,7 @@ server_configs = {}
 user_damage = {}  # (guild_id, user_id) -> total damage points
 user_warnings = {}  # (guild_id, user_id) -> list of warning dicts
 active_giveaways = {}  # message_id -> giveaway data dict
+seen_dm_users = set()  # Tracks users who received the one-time DM notice
 
 # --- Persistent JSON Storage for Damage & Warnings ---
 DATA_FILE = "damage_data.json"
@@ -99,6 +101,16 @@ def load_data():
 load_data()
 
 
+def parse_user_ids(raw_input: str) -> list[int]:
+    """Extracts unique numeric User IDs from a string of mentions/IDs."""
+    cleaned = raw_input.replace(",", " ").replace("<@", "").replace(">", "").replace("!", "")
+    ids = []
+    for item in cleaned.split():
+        if item.isdigit():
+            ids.append(int(item))
+    return list(set(ids))
+
+
 def get_server_config(guild_id: int) -> dict:
     if guild_id not in server_configs:
         server_configs[guild_id] = {
@@ -123,7 +135,7 @@ async def send_user_dm(user: discord.User, embed: discord.Embed):
     try:
         await user.send(embed=embed)
     except discord.Forbidden:
-        pass  # User has DMs disabled or blocked the bot
+        pass
 
 
 @bot.event
@@ -244,6 +256,50 @@ def create_damage_embed(action_type: str, member: discord.Member, points: int, c
 # --- Event Listeners ---
 
 @bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
+    # Check if the message is sent directly to the bot in a DM
+    if isinstance(message.channel, discord.DMChannel):
+        # Send a one-time disclaimer notice to first-time DMers
+        if message.author.id not in seen_dm_users:
+            seen_dm_users.add(message.author.id)
+            notice_embed = discord.Embed(
+                title="ℹ️ Notice",
+                description="Please note that messages sent to this bot's Direct Messages are monitored by staff. Standard server rules still apply in DMs.",
+                color=discord.Color.blue()
+            )
+            try:
+                await message.author.send(embed=notice_embed)
+            except discord.Forbidden:
+                pass
+
+        # Forward the DM to your log channel
+        log_channel = bot.get_channel(DM_LOG_CHANNEL_ID)
+
+        if log_channel:
+            embed = discord.Embed(
+                title="📩 New Direct Message Received",
+                description=message.content if message.content else "*[No text content]*",
+                color=discord.Color.purple(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed.set_author(
+                name=f"{message.author.name} ({message.author.id})",
+                icon_url=message.author.display_avatar.url
+            )
+
+            if message.attachments:
+                attachment_urls = "\n".join([att.url for att in message.attachments])
+                embed.add_field(name="Attachments", value=attachment_urls, inline=False)
+
+            await log_channel.send(embed=embed)
+
+    await bot.process_commands(message)
+
+
+@bot.event
 async def on_member_unban(guild: discord.Guild, user: discord.User):
     key = (guild.id, user.id)
     if key in user_damage or key in user_warnings:
@@ -310,6 +366,284 @@ async def on_message_delete(message: discord.Message):
                 await media_chan.send(embed=embed)
 
 
+# --- Info Commands (userinfo & serverinfo) ---
+
+@bot.tree.command(name="userinfo", description="Display detailed information about a member")
+async def userinfo(interaction: discord.Interaction, member: discord.Member = None):
+    target = member or interaction.user
+    roles = [role.mention for role in reversed(target.roles) if role != interaction.guild.default_role]
+    roles_str = ", ".join(roles) if roles else "None"
+
+    embed = discord.Embed(
+        title=f"User Info — {target.display_name}",
+        color=target.color if target.color != discord.Color.default() else discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_thumbnail(url=target.display_avatar.url)
+    embed.add_field(name="Username", value=f"`{target.name}`", inline=True)
+    embed.add_field(name="User ID", value=f"`{target.id}`", inline=True)
+    embed.add_field(name="Account Created", value=f"<t:{int(target.created_at.timestamp())}:R>", inline=False)
+    embed.add_field(name="Joined Server", value=f"<t:{int(target.joined_at.timestamp())}:R>", inline=False)
+    embed.add_field(name=f"Roles ({len(roles)})", value=roles_str, inline=False)
+
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.command(name="userinfo")
+async def userinfo_prefix(ctx, member: discord.Member = None):
+    target = member or ctx.author
+    roles = [role.mention for role in reversed(target.roles) if role != ctx.guild.default_role]
+    roles_str = ", ".join(roles) if roles else "None"
+
+    embed = discord.Embed(
+        title=f"User Info — {target.display_name}",
+        color=target.color if target.color != discord.Color.default() else discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_thumbnail(url=target.display_avatar.url)
+    embed.add_field(name="Username", value=f"`{target.name}`", inline=True)
+    embed.add_field(name="User ID", value=f"`{target.id}`", inline=True)
+    embed.add_field(name="Account Created", value=f"<t:{int(target.created_at.timestamp())}:R>", inline=False)
+    embed.add_field(name="Joined Server", value=f"<t:{int(target.joined_at.timestamp())}:R>", inline=False)
+    embed.add_field(name=f"Roles ({len(roles)})", value=roles_str, inline=False)
+
+    await ctx.send(embed=embed)
+
+
+@bot.tree.command(name="serverinfo", description="Display detailed information about this server")
+async def serverinfo(interaction: discord.Interaction):
+    guild = interaction.guild
+    text_channels = len(guild.text_channels)
+    voice_channels = len(guild.voice_channels)
+    categories = len(guild.categories)
+    bots = sum(1 for m in guild.members if m.bot)
+    humans = guild.member_count - bots
+
+    embed = discord.Embed(
+        title=f"Server Info — {guild.name}",
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+
+    embed.add_field(name="Owner", value=f"{guild.owner.mention} (`{guild.owner.id}`)", inline=False)
+    embed.add_field(name="Server ID", value=f"`{guild.id}`", inline=True)
+    embed.add_field(name="Created On", value=f"<t:{int(guild.created_at.timestamp())}:R>", inline=True)
+    embed.add_field(
+        name="Members",
+        value=f"Total: **{guild.member_count}**\nHumans: **{humans}**\nBots: **{bots}**",
+        inline=True
+    )
+    embed.add_field(
+        name="Channels",
+        value=f"Text: **{text_channels}**\nVoice: **{voice_channels}**\nCategories: **{categories}**",
+        inline=True
+    )
+    embed.add_field(name="Roles", value=f"**{len(guild.roles)}** roles", inline=True)
+    embed.add_field(name="Boost Level",
+                    value=f"Tier **{guild.premium_tier}** ({guild.premium_subscription_count} boosts)", inline=True)
+
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.command(name="serverinfo")
+async def serverinfo_prefix(ctx):
+    guild = ctx.guild
+    text_channels = len(guild.text_channels)
+    voice_channels = len(guild.voice_channels)
+    categories = len(guild.categories)
+    bots = sum(1 for m in guild.members if m.bot)
+    humans = guild.member_count - bots
+
+    embed = discord.Embed(
+        title=f"Server Info — {guild.name}",
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+
+    embed.add_field(name="Owner", value=f"{guild.owner.mention} (`{guild.owner.id}`)", inline=False)
+    embed.add_field(name="Server ID", value=f"`{guild.id}`", inline=True)
+    embed.add_field(name="Created On", value=f"<t:{int(guild.created_at.timestamp())}:R>", inline=True)
+    embed.add_field(
+        name="Members",
+        value=f"Total: **{guild.member_count}**\nHumans: **{humans}**\nBots: **{bots}**",
+        inline=True
+    )
+    embed.add_field(
+        name="Channels",
+        value=f"Text: **{text_channels}**\nVoice: **{voice_channels}**\nCategories: **{categories}**",
+        inline=True
+    )
+    embed.add_field(name="Roles", value=f"**{len(guild.roles)}** roles", inline=True)
+    embed.add_field(name="Boost Level",
+                    value=f"Tier **{guild.premium_tier}** ({guild.premium_subscription_count} boosts)", inline=True)
+
+    await ctx.send(embed=embed)
+
+
+# --- Purge Suite (purge, purge-human, purge-bot) ---
+
+@bot.tree.command(name="purge", description="Bulk delete messages in the current channel")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def purge(interaction: discord.Interaction, amount: int, user: discord.Member = None):
+    if amount < 1 or amount > 100:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.",
+                                                ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    def check(m):
+        return m.author == user if user else True
+
+    deleted = await interaction.channel.purge(limit=amount, check=check)
+    await interaction.followup.send(f"{SUCCESSFUL_SPIN} Deleted **{len(deleted)}** message(s).", ephemeral=True)
+    await log_action(
+        interaction.guild,
+        "Messages Purged",
+        f"**Channel:** {interaction.channel.mention}\n**Count:** {len(deleted)}\n**Target Filter:** {user.mention if user else 'All'}\n**Moderator:** {interaction.user.mention}",
+        discord.Color.red()
+    )
+
+
+@bot.command(name="purge")
+@commands.has_permissions(manage_messages=True)
+async def purge_prefix(ctx, amount: int, user: discord.Member = None):
+    if amount < 1 or amount > 100:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.")
+        return
+
+    await ctx.message.delete()
+
+    def check(m):
+        return m.author == user if user else True
+
+    deleted = await ctx.channel.purge(limit=amount, check=check)
+    msg = await ctx.send(f"{SUCCESSFUL_SPIN} Deleted **{len(deleted)}** message(s).")
+    await asyncio.sleep(3)
+    await msg.delete()
+
+    await log_action(
+        ctx.guild,
+        "Messages Purged",
+        f"**Channel:** {ctx.channel.mention}\n**Count:** {len(deleted)}\n**Target Filter:** {user.mention if user else 'All'}\n**Moderator:** {ctx.author.mention}",
+        discord.Color.red()
+    )
+
+
+@bot.tree.command(name="purge-human", description="Bulk delete messages sent only by humans")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def purge_human(interaction: discord.Interaction, amount: int):
+    if amount < 1 or amount > 100:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.",
+                                                ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    deleted = await interaction.channel.purge(limit=amount, check=lambda m: not m.author.bot)
+    await interaction.followup.send(f"{SUCCESSFUL_SPIN} Deleted **{len(deleted)}** human message(s).", ephemeral=True)
+    await log_action(
+        interaction.guild,
+        "Human Messages Purged",
+        f"**Channel:** {interaction.channel.mention}\n**Count:** {len(deleted)}\n**Moderator:** {interaction.user.mention}",
+        discord.Color.red()
+    )
+
+
+@bot.command(name="purge-human", aliases=["purgehuman"])
+@commands.has_permissions(manage_messages=True)
+async def purge_human_prefix(ctx, amount: int):
+    if amount < 1 or amount > 100:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.")
+        return
+
+    await ctx.message.delete()
+    deleted = await ctx.channel.purge(limit=amount, check=lambda m: not m.author.bot)
+    msg = await ctx.send(f"{SUCCESSFUL_SPIN} Deleted **{len(deleted)}** human message(s).")
+    await asyncio.sleep(3)
+    await msg.delete()
+
+    await log_action(
+        ctx.guild,
+        "Human Messages Purged",
+        f"**Channel:** {ctx.channel.mention}\n**Count:** {len(deleted)}\n**Moderator:** {ctx.author.mention}",
+        discord.Color.red()
+    )
+
+
+@bot.tree.command(name="purge-bot", description="Bulk delete messages sent only by bots")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def purge_bot(interaction: discord.Interaction, amount: int):
+    if amount < 1 or amount > 100:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.",
+                                                ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    deleted = await interaction.channel.purge(limit=amount, check=lambda m: m.author.bot)
+    await interaction.followup.send(f"{SUCCESSFUL_SPIN} Deleted **{len(deleted)}** bot message(s).", ephemeral=True)
+    await log_action(
+        interaction.guild,
+        "Bot Messages Purged",
+        f"**Channel:** {interaction.channel.mention}\n**Count:** {len(deleted)}\n**Moderator:** {interaction.user.mention}",
+        discord.Color.red()
+    )
+
+
+@bot.command(name="purge-bot", aliases=["purgebot"])
+@commands.has_permissions(manage_messages=True)
+async def purge_bot_prefix(ctx, amount: int):
+    if amount < 1 or amount > 100:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Please enter an amount between 1 and 100.")
+        return
+
+    await ctx.message.delete()
+    deleted = await ctx.channel.purge(limit=amount, check=lambda m: m.author.bot)
+    msg = await ctx.send(f"{SUCCESSFUL_SPIN} Deleted **{len(deleted)}** bot message(s).")
+    await asyncio.sleep(3)
+    await msg.delete()
+
+    await log_action(
+        ctx.guild,
+        "Bot Messages Purged",
+        f"**Channel:** {ctx.channel.mention}\n**Count:** {len(deleted)}\n**Moderator:** {ctx.author.mention}",
+        discord.Color.red()
+    )
+
+
+# --- Direct Message Commands ---
+
+@bot.tree.command(name="dm", description="Send a direct message to a user through the bot")
+@app_commands.checks.has_permissions(administrator=True)
+async def dm_user(interaction: discord.Interaction, user: discord.User, message: str):
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        await user.send(message)
+        await interaction.followup.send(f"{SUCCESSFUL_SPIN} Successfully sent DM to {user.mention}.", ephemeral=True)
+
+    except discord.Forbidden:
+        await interaction.followup.send(
+            f"{UNSUCCESSFUL_SPIN} Could not send DM to {user.mention}. They may have DMs disabled or blocked the bot.",
+            ephemeral=True
+        )
+    except Exception as e:
+        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} An error occurred: {e}", ephemeral=True)
+
+
+@bot.command(name="dm")
+@commands.has_permissions(administrator=True)
+async def dm_user_prefix(ctx, user: discord.User, *, message: str):
+    try:
+        await user.send(message)
+        await ctx.send(f"{SUCCESSFUL_SPIN} Successfully sent DM to {user.mention}.")
+    except discord.Forbidden:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Could not send DM to {user.mention}. Their DMs may be closed.")
+
+
 # --- Dynamic Prefix Command ---
 
 @bot.tree.command(name="setprefix", description="Change the bot prefix for text commands in this server")
@@ -343,7 +677,211 @@ def parse_duration(duration_str: str) -> int:
     return int(amount) * units.get(unit, 0) if unit in units else None
 
 
-# --- Manual Moderation Commands (Mute, Unmute, Ban, Unban) ---
+# --- Bulk Moderation Commands ---
+
+@bot.tree.command(name="bulkban", description="Ban multiple users at once using IDs or mentions.")
+@app_commands.checks.has_permissions(ban_members=True)
+async def bulkban(interaction: discord.Interaction, users: str, reason: str = "No reason provided"):
+    await interaction.response.defer(ephemeral=True)
+    user_ids = parse_user_ids(users)
+
+    if not user_ids:
+        await interaction.followup.send("No valid user IDs or mentions found.")
+        return
+
+    successful, failed = [], []
+    for user_id in user_ids:
+        try:
+            await interaction.guild.ban(discord.Object(id=user_id), reason=f"{reason} | Executed by {interaction.user}")
+            successful.append(str(user_id))
+        except Exception:
+            failed.append(str(user_id))
+
+    await interaction.followup.send(
+        f"**Bulk Ban Results:**\n"
+        f" Successful ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
+
+
+@bot.command(name="bulkban")
+@commands.has_permissions(ban_members=True)
+async def bulkban_prefix(ctx, users: str, *, reason: str = "No reason provided"):
+    user_ids = parse_user_ids(users)
+    if not user_ids:
+        await ctx.send("No valid user IDs or mentions found.")
+        return
+
+    successful, failed = [], []
+    for user_id in user_ids:
+        try:
+            await ctx.guild.ban(discord.Object(id=user_id), reason=f"{reason} | Executed by {ctx.author}")
+            successful.append(str(user_id))
+        except Exception:
+            failed.append(str(user_id))
+
+    await ctx.send(
+        f"**Bulk Ban Results:**\n"
+        f" Successful ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
+
+
+@bot.tree.command(name="bulkkick", description="Kick multiple members at once.")
+@app_commands.checks.has_permissions(kick_members=True)
+async def bulkkick(interaction: discord.Interaction, users: str, reason: str = "No reason provided"):
+    await interaction.response.defer(ephemeral=True)
+    user_ids = parse_user_ids(users)
+
+    if not user_ids:
+        await interaction.followup.send("No valid user IDs or mentions found.")
+        return
+
+    successful, failed = [], []
+    for user_id in user_ids:
+        try:
+            member = await interaction.guild.fetch_member(user_id)
+            await member.kick(reason=f"{reason} | Executed by {interaction.user}")
+            successful.append(member.mention)
+        except Exception:
+            failed.append(str(user_id))
+
+    await interaction.followup.send(
+        f"**Bulk Kick Results:**\n"
+        f" Successful ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
+
+
+@bot.command(name="bulkkick")
+@commands.has_permissions(kick_members=True)
+async def bulkkick_prefix(ctx, users: str, *, reason: str = "No reason provided"):
+    user_ids = parse_user_ids(users)
+    if not user_ids:
+        await ctx.send("No valid user IDs or mentions found.")
+        return
+
+    successful, failed = [], []
+    for user_id in user_ids:
+        try:
+            member = await ctx.guild.fetch_member(user_id)
+            await member.kick(reason=f"{reason} | Executed by {ctx.author}")
+            successful.append(member.mention)
+        except Exception:
+            failed.append(str(user_id))
+
+    await ctx.send(
+        f"**Bulk Kick Results:**\n"
+        f" Successful ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
+
+
+@bot.tree.command(name="bulkmute", description="Timeout multiple members for a set duration in minutes.")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def bulkmute(interaction: discord.Interaction, users: str, minutes: int, reason: str = "No reason provided"):
+    await interaction.response.defer(ephemeral=True)
+    user_ids = parse_user_ids(users)
+
+    if not user_ids:
+        await interaction.followup.send("No valid user IDs or mentions found.")
+        return
+
+    duration = timedelta(minutes=minutes)
+    successful, failed = [], []
+
+    for user_id in user_ids:
+        try:
+            member = await interaction.guild.fetch_member(user_id)
+            await member.timeout(duration, reason=f"{reason} | Executed by {interaction.user}")
+            successful.append(member.mention)
+        except Exception:
+            failed.append(str(user_id))
+
+    await interaction.followup.send(
+        f"**Bulk Mute Results ({minutes}m):**\n"
+        f" Successful ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
+
+
+@bot.command(name="bulkmute")
+@commands.has_permissions(moderate_members=True)
+async def bulkmute_prefix(ctx, users: str, minutes: int, *, reason: str = "No reason provided"):
+    user_ids = parse_user_ids(users)
+    if not user_ids:
+        await ctx.send("No valid user IDs or mentions found.")
+        return
+
+    duration = timedelta(minutes=minutes)
+    successful, failed = [], []
+
+    for user_id in user_ids:
+        try:
+            member = await ctx.guild.fetch_member(user_id)
+            await member.timeout(duration, reason=f"{reason} | Executed by {ctx.author}")
+            successful.append(member.mention)
+        except Exception:
+            failed.append(str(user_id))
+
+    await ctx.send(
+        f"**Bulk Mute Results ({minutes}m):**\n"
+        f" Successful ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
+
+
+@bot.tree.command(name="bulkwarn", description="Send a warning message to multiple members.")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def bulkwarn(interaction: discord.Interaction, users: str, reason: str):
+    await interaction.response.defer(ephemeral=True)
+    user_ids = parse_user_ids(users)
+
+    if not user_ids:
+        await interaction.followup.send("No valid user IDs or mentions found.")
+        return
+
+    successful, failed = [], []
+    for user_id in user_ids:
+        try:
+            member = await interaction.guild.fetch_member(user_id)
+            await member.send(f"⚠️ **Warning from {interaction.guild.name}**: {reason}")
+            successful.append(member.mention)
+        except Exception:
+            failed.append(str(user_id))
+
+    await interaction.followup.send(
+        f"**Bulk Warn Results:**\n"
+        f" Warned ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed to DM ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
+
+
+@bot.command(name="bulkwarn")
+@commands.has_permissions(manage_messages=True)
+async def bulkwarn_prefix(ctx, users: str, *, reason: str):
+    user_ids = parse_user_ids(users)
+    if not user_ids:
+        await ctx.send("No valid user IDs or mentions found.")
+        return
+
+    successful, failed = [], []
+    for user_id in user_ids:
+        try:
+            member = await ctx.guild.fetch_member(user_id)
+            await member.send(f"⚠️ **Warning from {ctx.guild.name}**: {reason}")
+            successful.append(member.mention)
+        except Exception:
+            failed.append(str(user_id))
+
+    await ctx.send(
+        f"**Bulk Warn Results:**\n"
+        f" Warned ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed to DM ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
+
+
+# --- Manual Moderation Commands ---
 
 @bot.tree.command(name="mute", description="Mute (timeout) a member manually")
 @app_commands.checks.has_permissions(moderate_members=True)
@@ -361,7 +899,7 @@ async def mute(interaction: discord.Interaction, member: discord.Member, duratio
         )
         return
 
-    if seconds > 28 * 86400:  # 28 days max in Discord
+    if seconds > 28 * 86400:
         await interaction.response.send_message(
             f"{UNSUCCESSFUL_SPIN} Discord timeouts cannot exceed 28 days.",
             ephemeral=True
@@ -800,6 +1338,21 @@ async def embed(interaction: discord.Interaction):
     await interaction.response.send_modal(EmbedModal())
 
 
+@bot.command(name="embed")
+@commands.has_permissions(manage_messages=True)
+async def embed_prefix(ctx, title: str, *, description: str):
+    embed_obj = discord.Embed(
+        title=title,
+        description=description,
+        color=discord.Color.blue()
+    )
+    try:
+        await ctx.send(embed=embed_obj)
+        await ctx.message.delete()
+    except discord.Forbidden:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} I don't have permission to send embeds here.")
+
+
 # --- Giveaway System ---
 
 class GiveawayButton(discord.ui.View):
@@ -952,6 +1505,63 @@ async def giveaway(interaction: discord.Interaction):
     await interaction.response.send_modal(GiveawayModal())
 
 
+@bot.command(name="giveaway")
+@commands.has_permissions(administrator=True)
+async def giveaway_prefix(ctx, duration_str: str, winners: int, *, prize: str):
+    seconds = parse_duration(duration_str)
+    if not seconds or seconds <= 0:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Invalid duration format! Use e.g. `10m`, `2h`, or `1d`.")
+        return
+
+    if winners < 1:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Winners must be a positive number.")
+        return
+
+    end_timestamp = int(time.time() + seconds)
+    view = GiveawayButton(0)
+
+    def build_embed():
+        return discord.Embed(
+            title=f"**{prize}**",
+            description=(
+                f"Ends: <t:{end_timestamp}:R> (<t:{end_timestamp}:f>)\n"
+                f"Hosted by: {ctx.author.mention} (`@{ctx.author.name}`)\n"
+                f"Entries: **{len(view.entries)}**\n"
+                f"Winners: **{winners}**"
+            ),
+            color=discord.Color.blue(),
+            timestamp=discord.utils.utcnow()
+        )
+
+    msg = await ctx.send(embed=build_embed(), view=view)
+    view.message_id = msg.id
+
+    active_giveaways[msg.id] = {
+        "msg": msg,
+        "guild_id": ctx.guild.id,
+        "channel_id": ctx.channel.id,
+        "prize": prize,
+        "host": ctx.author,
+        "end_timestamp": end_timestamp,
+        "winner_count": winners,
+        "view": view,
+        "active": True
+    }
+
+    start_time = time.time()
+    while time.time() - start_time < seconds:
+        await asyncio.sleep(5)
+        if msg.id not in active_giveaways or not active_giveaways[msg.id]["active"]:
+            return
+        try:
+            await msg.edit(embed=build_embed(), view=view)
+        except discord.HTTPException:
+            break
+
+    if msg.id in active_giveaways and active_giveaways[msg.id]["active"]:
+        await finalize_giveaway(msg.id, ctx.guild)
+
+
 # --- Logging Channel Configuration ---
 
 @bot.tree.command(name="setlogchannel", description="Set dynamic logging channels for messages, media, or general logs")
@@ -966,6 +1576,26 @@ async def setlogchannel(interaction: discord.Interaction, log_type: app_commands
     config = get_server_config(interaction.guild_id)
     config[f"{log_type.value}_log_channel" if log_type.value != "general" else "log_channel"] = channel.id
     await interaction.response.send_message(f"{SUCCESSFUL_SPIN} {log_type.name} set to {channel.mention}.")
+
+
+@bot.command(name="setlogchannel")
+@commands.has_permissions(administrator=True)
+async def setlogchannel_prefix(ctx, log_type: str, channel: discord.TextChannel):
+    valid_types = {
+        "general": ("log_channel", "General Audit Logs"),
+        "msg": ("msg_log_channel", "Message Logs (Deleted Messages)"),
+        "media": ("media_log_channel", "Media Logs (Images/GIFs)")
+    }
+
+    clean_type = log_type.lower().strip()
+    if clean_type not in valid_types:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Invalid log type! Choose from: `general`, `msg`, or `media`.")
+        return
+
+    key, display_name = valid_types[clean_type]
+    config = get_server_config(ctx.guild.id)
+    config[key] = channel.id
+    await ctx.send(f"{SUCCESSFUL_SPIN} {display_name} set to {channel.mention}.")
 
 
 # --- Add Damage Commands ---
@@ -1057,10 +1687,9 @@ async def checkdamage_prefix(ctx, member: discord.Member = None):
     await ctx.send(embed=embed)
 
 
-@bot.tree.command(name="warn", description="Warn a user and apply damage points")
+@bot.tree.command(name="warn", description="Warn a user")
 @app_commands.checks.has_permissions(kick_members=True)
-async def warn(interaction: discord.Interaction, member: discord.Member, points: int,
-               reason: str = "No reason provided"):
+async def warn(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
     if member.bot:
         await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot warn bots.", ephemeral=True)
         return
@@ -1068,14 +1697,13 @@ async def warn(interaction: discord.Interaction, member: discord.Member, points:
     key = (interaction.guild_id, member.id)
     if key not in user_warnings:
         user_warnings[key] = []
-    user_warnings[key].append({"points": points, "reason": reason, "by": interaction.user.display_name})
 
-    current_damage, punishment = await apply_damage_and_punish(interaction.guild, member, points, reason,
-                                                               interaction.user)
+    user_warnings[key].append({"reason": reason, "by": interaction.user.display_name})
+    save_data()
 
     dm_embed = discord.Embed(
         title=f"⚠️ Warning Received in {interaction.guild.name}",
-        description=f"You received **+{points} damage points**.\n**Total Damage:** `{current_damage}/25`",
+        description=f"You have received an official warning.",
         color=discord.Color.orange(),
         timestamp=discord.utils.utcnow()
     )
@@ -1083,14 +1711,28 @@ async def warn(interaction: discord.Interaction, member: discord.Member, points:
     dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
     await send_user_dm(member, dm_embed)
 
-    embed = create_damage_embed("add", member, points, current_damage, punishment, reason, interaction.user)
-    embed.title = "⚠️ User Warned"
+    embed = discord.Embed(
+        title="⚠️ User Warned",
+        description=f"{SUCCESSFUL_SPIN} Successfully issued a warning to {member.mention}.",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text=f"Moderator: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+
     await interaction.response.send_message(embed=embed)
+    await log_action(
+        interaction.guild,
+        "User Warned",
+        f"**User:** {member.mention} ({member.id})\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
+        discord.Color.orange()
+    )
 
 
 @bot.command(name="warn")
 @commands.has_permissions(kick_members=True)
-async def warn_prefix(ctx, member: discord.Member, points: int, *, reason: str = "No reason provided"):
+async def warn_prefix(ctx, member: discord.Member, *, reason: str = "No reason provided"):
     if member.bot:
         await ctx.send(f"{UNSUCCESSFUL_SPIN} You cannot warn bots.")
         return
@@ -1098,13 +1740,13 @@ async def warn_prefix(ctx, member: discord.Member, points: int, *, reason: str =
     key = (ctx.guild.id, member.id)
     if key not in user_warnings:
         user_warnings[key] = []
-    user_warnings[key].append({"points": points, "reason": reason, "by": ctx.author.display_name})
 
-    current_damage, punishment = await apply_damage_and_punish(ctx.guild, member, points, reason, ctx.author)
+    user_warnings[key].append({"reason": reason, "by": ctx.author.display_name})
+    save_data()
 
     dm_embed = discord.Embed(
         title=f"⚠️ Warning Received in {ctx.guild.name}",
-        description=f"You received **+{points} damage points**.\n**Total Damage:** `{current_damage}/25`",
+        description=f"You have received an official warning.",
         color=discord.Color.orange(),
         timestamp=discord.utils.utcnow()
     )
@@ -1112,12 +1754,26 @@ async def warn_prefix(ctx, member: discord.Member, points: int, *, reason: str =
     dm_embed.set_footer(text=f"Moderator: {ctx.author.display_name}")
     await send_user_dm(member, dm_embed)
 
-    embed = create_damage_embed("add", member, points, current_damage, punishment, reason, ctx.author)
-    embed.title = "⚠️ User Warned"
+    embed = discord.Embed(
+        title="⚠️ User Warned",
+        description=f"{SUCCESSFUL_SPIN} Successfully issued a warning to {member.mention}.",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text=f"Moderator: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+
     await ctx.send(embed=embed)
+    await log_action(
+        ctx.guild,
+        "User Warned",
+        f"**User:** {member.mention} ({member.id})\n**Reason:** {reason}\n**Moderator:** {ctx.author.mention}",
+        discord.Color.orange()
+    )
 
 
-@bot.tree.command(name="warnings", description="View warnings and damage for a user")
+@bot.tree.command(name="warnings", description="View warnings for a user")
 async def warnings(interaction: discord.Interaction, member: discord.Member):
     key = (interaction.guild_id, member.id)
     total_points = user_damage.get(key, 0)
@@ -1125,13 +1781,13 @@ async def warnings(interaction: discord.Interaction, member: discord.Member):
 
     if not warns:
         await interaction.response.send_message(
-            f"{SUCCESSFUL_SPIN} **{member.display_name}** has no recorded warnings or damage points in this server.")
+            f"{SUCCESSFUL_SPIN} **{member.display_name}** has no recorded warnings in this server.")
         return
 
     embed = discord.Embed(title=f"Warnings for {member.display_name}",
-                          description=f"**Total Damage:** `{total_points}/25`", color=discord.Color.blue())
+                          description=f"**Current Damage:** `{total_points}/25`", color=discord.Color.blue())
     for idx, w in enumerate(warns, 1):
-        embed.add_field(name=f"Warning #{idx} ({w['points']} pts)",
+        embed.add_field(name=f"Warning #{idx}",
                         value=f"**Reason:** {w['reason']}\n**Moderator:** {w['by']}", inline=False)
 
     await interaction.response.send_message(embed=embed)
@@ -1146,13 +1802,13 @@ async def warnings_prefix(ctx, member: discord.Member = None):
 
     if not warns:
         await ctx.send(
-            f"{SUCCESSFUL_SPIN} **{target.display_name}** has no recorded warnings or damage points in this server.")
+            f"{SUCCESSFUL_SPIN} **{target.display_name}** has no recorded warnings in this server.")
         return
 
     embed = discord.Embed(title=f"Warnings for {target.display_name}",
-                          description=f"**Total Damage:** `{total_points}/25`", color=discord.Color.blue())
+                          description=f"**Current Damage:** `{total_points}/25`", color=discord.Color.blue())
     for idx, w in enumerate(warns, 1):
-        embed.add_field(name=f"Warning #{idx} ({w['points']} pts)",
+        embed.add_field(name=f"Warning #{idx}",
                         value=f"**Reason:** {w['reason']}\n**Moderator:** {w['by']}", inline=False)
 
     await ctx.send(embed=embed)
@@ -1247,6 +1903,46 @@ async def addemote_prefix(ctx, name: str, url: str):
         await ctx.send(f"{SUCCESSFUL_SPIN} Added emoji {new_emoji} (`:{name}:`)!")
     except discord.HTTPException as e:
         await ctx.send(f"{UNSUCCESSFUL_SPIN} Failed to add emoji: {e}")
+
+
+# --- Reaction Commands ---
+
+@bot.tree.command(name="react", description="React to a specific message with an emoji")
+@app_commands.checks.has_permissions(add_reactions=True)
+@app_commands.describe(
+    message_id="The ID of the message to react to",
+    emoji="The emoji to add (e.g. 👍 or custom emoji)"
+)
+async def react(interaction: discord.Interaction, message_id: str, emoji: str):
+    if not message_id.isdigit():
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please provide a valid numeric Message ID.", ephemeral=True)
+        return
+
+    try:
+        target_message = await interaction.channel.fetch_message(int(message_id))
+        await target_message.add_reaction(emoji)
+        await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Added reaction {emoji} to message `{message_id}`.", ephemeral=True)
+    except discord.NotFound:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Message not found in this channel.", ephemeral=True)
+    except discord.HTTPException:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Failed to add reaction. Make sure the emoji is valid and I have permissions.", ephemeral=True)
+
+
+@bot.command(name="react")
+@commands.has_permissions(add_reactions=True)
+async def react_prefix(ctx, message_id: str, emoji: str):
+    if not message_id.isdigit():
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Please provide a valid numeric Message ID.")
+        return
+
+    try:
+        target_message = await ctx.channel.fetch_message(int(message_id))
+        await target_message.add_reaction(emoji)
+        await ctx.message.delete()
+    except discord.NotFound:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Message not found in this channel.", delete_after=5)
+    except discord.HTTPException:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Failed to add reaction. Check the emoji and my permissions.", delete_after=5)
 
 
 bot.run(TOKEN)
