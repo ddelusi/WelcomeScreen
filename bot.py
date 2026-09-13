@@ -6,7 +6,7 @@ import time
 import asyncio
 import random
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 import aiohttp
 import discord
 from discord import app_commands
@@ -99,6 +99,16 @@ def load_data():
 
 
 load_data()
+
+
+def parse_user_ids(raw_input: str) -> list[int]:
+    """Extracts unique numeric User IDs from a string of mentions/IDs."""
+    cleaned = raw_input.replace(",", " ").replace("<@", "").replace(">", "").replace("!", "")
+    ids = []
+    for item in cleaned.split():
+        if item.isdigit():
+            ids.append(int(item))
+    return list(set(ids))
 
 
 def get_server_config(guild_id: int) -> dict:
@@ -665,6 +675,210 @@ def parse_duration(duration_str: str) -> int:
     amount, unit = match.groups()
     unit = unit.lower()
     return int(amount) * units.get(unit, 0) if unit in units else None
+
+
+# --- Bulk Moderation Commands ---
+
+@bot.tree.command(name="bulkban", description="Ban multiple users at once using IDs or mentions.")
+@app_commands.checks.has_permissions(ban_members=True)
+async def bulkban(interaction: discord.Interaction, users: str, reason: str = "No reason provided"):
+    await interaction.response.defer(ephemeral=True)
+    user_ids = parse_user_ids(users)
+
+    if not user_ids:
+        await interaction.followup.send("No valid user IDs or mentions found.")
+        return
+
+    successful, failed = [], []
+    for user_id in user_ids:
+        try:
+            await interaction.guild.ban(discord.Object(id=user_id), reason=f"{reason} | Executed by {interaction.user}")
+            successful.append(str(user_id))
+        except Exception:
+            failed.append(str(user_id))
+
+    await interaction.followup.send(
+        f"**Bulk Ban Results:**\n"
+        f" Successful ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
+
+
+@bot.command(name="bulkban")
+@commands.has_permissions(ban_members=True)
+async def bulkban_prefix(ctx, users: str, *, reason: str = "No reason provided"):
+    user_ids = parse_user_ids(users)
+    if not user_ids:
+        await ctx.send("No valid user IDs or mentions found.")
+        return
+
+    successful, failed = [], []
+    for user_id in user_ids:
+        try:
+            await ctx.guild.ban(discord.Object(id=user_id), reason=f"{reason} | Executed by {ctx.author}")
+            successful.append(str(user_id))
+        except Exception:
+            failed.append(str(user_id))
+
+    await ctx.send(
+        f"**Bulk Ban Results:**\n"
+        f" Successful ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
+
+
+@bot.tree.command(name="bulkkick", description="Kick multiple members at once.")
+@app_commands.checks.has_permissions(kick_members=True)
+async def bulkkick(interaction: discord.Interaction, users: str, reason: str = "No reason provided"):
+    await interaction.response.defer(ephemeral=True)
+    user_ids = parse_user_ids(users)
+
+    if not user_ids:
+        await interaction.followup.send("No valid user IDs or mentions found.")
+        return
+
+    successful, failed = [], []
+    for user_id in user_ids:
+        try:
+            member = await interaction.guild.fetch_member(user_id)
+            await member.kick(reason=f"{reason} | Executed by {interaction.user}")
+            successful.append(member.mention)
+        except Exception:
+            failed.append(str(user_id))
+
+    await interaction.followup.send(
+        f"**Bulk Kick Results:**\n"
+        f" Successful ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
+
+
+@bot.command(name="bulkkick")
+@commands.has_permissions(kick_members=True)
+async def bulkkick_prefix(ctx, users: str, *, reason: str = "No reason provided"):
+    user_ids = parse_user_ids(users)
+    if not user_ids:
+        await ctx.send("No valid user IDs or mentions found.")
+        return
+
+    successful, failed = [], []
+    for user_id in user_ids:
+        try:
+            member = await ctx.guild.fetch_member(user_id)
+            await member.kick(reason=f"{reason} | Executed by {ctx.author}")
+            successful.append(member.mention)
+        except Exception:
+            failed.append(str(user_id))
+
+    await ctx.send(
+        f"**Bulk Kick Results:**\n"
+        f" Successful ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
+
+
+@bot.tree.command(name="bulkmute", description="Timeout multiple members for a set duration in minutes.")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def bulkmute(interaction: discord.Interaction, users: str, minutes: int, reason: str = "No reason provided"):
+    await interaction.response.defer(ephemeral=True)
+    user_ids = parse_user_ids(users)
+
+    if not user_ids:
+        await interaction.followup.send("No valid user IDs or mentions found.")
+        return
+
+    duration = timedelta(minutes=minutes)
+    successful, failed = [], []
+
+    for user_id in user_ids:
+        try:
+            member = await interaction.guild.fetch_member(user_id)
+            await member.timeout(duration, reason=f"{reason} | Executed by {interaction.user}")
+            successful.append(member.mention)
+        except Exception:
+            failed.append(str(user_id))
+
+    await interaction.followup.send(
+        f"**Bulk Mute Results ({minutes}m):**\n"
+        f" Successful ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
+
+
+@bot.command(name="bulkmute")
+@commands.has_permissions(moderate_members=True)
+async def bulkmute_prefix(ctx, users: str, minutes: int, *, reason: str = "No reason provided"):
+    user_ids = parse_user_ids(users)
+    if not user_ids:
+        await ctx.send("No valid user IDs or mentions found.")
+        return
+
+    duration = timedelta(minutes=minutes)
+    successful, failed = [], []
+
+    for user_id in user_ids:
+        try:
+            member = await ctx.guild.fetch_member(user_id)
+            await member.timeout(duration, reason=f"{reason} | Executed by {ctx.author}")
+            successful.append(member.mention)
+        except Exception:
+            failed.append(str(user_id))
+
+    await ctx.send(
+        f"**Bulk Mute Results ({minutes}m):**\n"
+        f" Successful ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
+
+
+@bot.tree.command(name="bulkwarn", description="Send a warning message to multiple members.")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def bulkwarn(interaction: discord.Interaction, users: str, reason: str):
+    await interaction.response.defer(ephemeral=True)
+    user_ids = parse_user_ids(users)
+
+    if not user_ids:
+        await interaction.followup.send("No valid user IDs or mentions found.")
+        return
+
+    successful, failed = [], []
+    for user_id in user_ids:
+        try:
+            member = await interaction.guild.fetch_member(user_id)
+            await member.send(f"⚠️ **Warning from {interaction.guild.name}**: {reason}")
+            successful.append(member.mention)
+        except Exception:
+            failed.append(str(user_id))
+
+    await interaction.followup.send(
+        f"**Bulk Warn Results:**\n"
+        f" Warned ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed to DM ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
+
+
+@bot.command(name="bulkwarn")
+@commands.has_permissions(manage_messages=True)
+async def bulkwarn_prefix(ctx, users: str, *, reason: str):
+    user_ids = parse_user_ids(users)
+    if not user_ids:
+        await ctx.send("No valid user IDs or mentions found.")
+        return
+
+    successful, failed = [], []
+    for user_id in user_ids:
+        try:
+            member = await ctx.guild.fetch_member(user_id)
+            await member.send(f"⚠️ **Warning from {ctx.guild.name}**: {reason}")
+            successful.append(member.mention)
+        except Exception:
+            failed.append(str(user_id))
+
+    await ctx.send(
+        f"**Bulk Warn Results:**\n"
+        f" Warned ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
+        f" Failed to DM ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    )
 
 
 # --- Manual Moderation Commands ---
