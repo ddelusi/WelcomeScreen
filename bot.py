@@ -253,6 +253,39 @@ def create_damage_embed(action_type: str, member: discord.Member, points: int, c
     return embed
 
 
+# --- Manual Reply Commands ---
+
+@bot.tree.context_menu(name="Reply as Bot")
+async def reply_as_bot(interaction: discord.Interaction, message: discord.Message):
+    class ReplyModal(discord.ui.Modal, title="Send Reply as Bot"):
+        reply_text = discord.ui.TextInput(
+            label="Your Message",
+            style=discord.TextStyle.paragraph,
+            placeholder="Type what the bot should say...",
+            required=True
+        )
+
+        async def on_submit(self, modal_interaction: discord.Interaction):
+            try:
+                await message.reply(self.reply_text.value)
+                await modal_interaction.response.send_message(f"{SUCCESSFUL_SPIN} Reply sent!", ephemeral=True)
+            except discord.Forbidden:
+                await modal_interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I don't have permission to reply in that channel.", ephemeral=True)
+
+    await interaction.response.send_modal(ReplyModal())
+
+
+@bot.command(name="reply")
+@commands.has_permissions(manage_messages=True)
+async def reply_prefix(ctx, target_message: discord.Message, *, response_text: str):
+    """Usage: !reply <message_id_or_link> <your response>"""
+    try:
+        await target_message.reply(response_text)
+        await ctx.message.delete()
+    except discord.Forbidden:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages in that channel.")
+
+
 # --- Event Listeners ---
 
 @bot.event
