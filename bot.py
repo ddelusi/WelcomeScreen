@@ -1938,4 +1938,44 @@ async def addemote_prefix(ctx, name: str, url: str):
         await ctx.send(f"{UNSUCCESSFUL_SPIN} Failed to add emoji: {e}")
 
 
+# --- Reaction Commands ---
+
+@bot.tree.command(name="react", description="React to a specific message with an emoji")
+@app_commands.checks.has_permissions(add_reactions=True)
+@app_commands.describe(
+    message_id="The ID of the message to react to",
+    emoji="The emoji to add (e.g. 👍 or custom emoji)"
+)
+async def react(interaction: discord.Interaction, message_id: str, emoji: str):
+    if not message_id.isdigit():
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please provide a valid numeric Message ID.", ephemeral=True)
+        return
+
+    try:
+        target_message = await interaction.channel.fetch_message(int(message_id))
+        await target_message.add_reaction(emoji)
+        await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Added reaction {emoji} to message `{message_id}`.", ephemeral=True)
+    except discord.NotFound:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Message not found in this channel.", ephemeral=True)
+    except discord.HTTPException:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Failed to add reaction. Make sure the emoji is valid and I have permissions.", ephemeral=True)
+
+
+@bot.command(name="react")
+@commands.has_permissions(add_reactions=True)
+async def react_prefix(ctx, message_id: str, emoji: str):
+    if not message_id.isdigit():
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Please provide a valid numeric Message ID.")
+        return
+
+    try:
+        target_message = await ctx.channel.fetch_message(int(message_id))
+        await target_message.add_reaction(emoji)
+        await ctx.message.delete()
+    except discord.NotFound:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Message not found in this channel.", delete_after=5)
+    except discord.HTTPException:
+        await ctx.send(f"{UNSUCCESSFUL_SPIN} Failed to add reaction. Check the emoji and my permissions.", delete_after=5)
+
+
 bot.run(TOKEN)
