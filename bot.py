@@ -270,9 +270,46 @@ async def reply_as_bot(interaction: discord.Interaction, message: discord.Messag
                 await message.reply(self.reply_text.value)
                 await modal_interaction.response.send_message(f"{SUCCESSFUL_SPIN} Reply sent!", ephemeral=True)
             except discord.Forbidden:
-                await modal_interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I don't have permission to reply in that channel.", ephemeral=True)
+                await modal_interaction.response.send_message(
+                    f"{UNSUCCESSFUL_SPIN} I don't have permission to reply in that channel.", ephemeral=True)
 
     await interaction.response.send_modal(ReplyModal())
+
+
+@bot.tree.command(name="reply", description="Reply to a specific message using its ID or link")
+@app_commands.checks.has_permissions(manage_messages=True)
+@app_commands.describe(
+    message_input="The Message ID or Message Link to reply to",
+    response="The message you want the bot to send"
+)
+async def reply_slash(interaction: discord.Interaction, message_input: str, response: str):
+    await interaction.response.defer(ephemeral=True)
+
+    # Extract Message ID if a full Discord URL was provided
+    if "/" in message_input:
+        message_id = int(message_input.split("/")[-1])
+    else:
+        try:
+            message_id = int(message_input)
+        except ValueError:
+            await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Invalid Message ID or Link provided.", ephemeral=True)
+            return
+
+    try:
+        # Fetch the target message in the current channel
+        target_message = await interaction.channel.fetch_message(message_id)
+
+        # Send reply
+        await target_message.reply(response)
+        await interaction.followup.send(f"{SUCCESSFUL_SPIN} Reply sent successfully!", ephemeral=True)
+    except discord.NotFound:
+        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Could not find a message with that ID in this channel.",
+                                        ephemeral=True)
+    except discord.Forbidden:
+        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} I don't have permission to reply in this channel.",
+                                        ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} An error occurred: {e}", ephemeral=True)
 
 
 @bot.command(name="reply")
@@ -1936,46 +1973,6 @@ async def addemote_prefix(ctx, name: str, url: str):
         await ctx.send(f"{SUCCESSFUL_SPIN} Added emoji {new_emoji} (`:{name}:`)!")
     except discord.HTTPException as e:
         await ctx.send(f"{UNSUCCESSFUL_SPIN} Failed to add emoji: {e}")
-
-
-# --- Reaction Commands ---
-
-@bot.tree.command(name="react", description="React to a specific message with an emoji")
-@app_commands.checks.has_permissions(add_reactions=True)
-@app_commands.describe(
-    message_id="The ID of the message to react to",
-    emoji="The emoji to add (e.g. 👍 or custom emoji)"
-)
-async def react(interaction: discord.Interaction, message_id: str, emoji: str):
-    if not message_id.isdigit():
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Please provide a valid numeric Message ID.", ephemeral=True)
-        return
-
-    try:
-        target_message = await interaction.channel.fetch_message(int(message_id))
-        await target_message.add_reaction(emoji)
-        await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Added reaction {emoji} to message `{message_id}`.", ephemeral=True)
-    except discord.NotFound:
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Message not found in this channel.", ephemeral=True)
-    except discord.HTTPException:
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Failed to add reaction. Make sure the emoji is valid and I have permissions.", ephemeral=True)
-
-
-@bot.command(name="react")
-@commands.has_permissions(add_reactions=True)
-async def react_prefix(ctx, message_id: str, emoji: str):
-    if not message_id.isdigit():
-        await ctx.send(f"{UNSUCCESSFUL_SPIN} Please provide a valid numeric Message ID.")
-        return
-
-    try:
-        target_message = await ctx.channel.fetch_message(int(message_id))
-        await target_message.add_reaction(emoji)
-        await ctx.message.delete()
-    except discord.NotFound:
-        await ctx.send(f"{UNSUCCESSFUL_SPIN} Message not found in this channel.", delete_after=5)
-    except discord.HTTPException:
-        await ctx.send(f"{UNSUCCESSFUL_SPIN} Failed to add reaction. Check the emoji and my permissions.", delete_after=5)
 
 
 bot.run(TOKEN)
