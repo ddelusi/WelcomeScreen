@@ -629,15 +629,20 @@ class BulkConfirmView(discord.ui.View):
         self.reason = reason
         self.author_id = author_id
 
-        # Red primary action button matching the screenshot style
+        # Red primary action button
         button_label = f"{action_type.capitalize()} All"
         self.confirm_button = discord.ui.Button(label=button_label, style=discord.ButtonStyle.red)
         self.confirm_button.callback = self.confirm_callback
         self.add_item(self.confirm_button)
 
+        # Grey secondary cancel button
+        self.cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
+        self.cancel_button.callback = self.cancel_callback
+        self.add_item(self.cancel_button)
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.author_id and interaction.user.id != self.author_id:
-            await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Only the moderator who ran this command can confirm.", ephemeral=True)
+            await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Only the moderator who ran this command can interact with these buttons.", ephemeral=True)
             return False
         return True
 
@@ -705,6 +710,36 @@ class BulkConfirmView(discord.ui.View):
 
         result_embed.set_footer(text="Action completed.")
         await interaction.edit_original_response(embed=result_embed, view=self)
+
+        public_embed = discord.Embed(
+            title=f"✅ Bulk {self.action_type.capitalize()} Completed",
+            description=f"Successfully executed **bulk {self.action_type}** on **{len(successful)}** user(s).",
+            color=discord.Color.from_rgb(255, 255, 255),
+            timestamp=discord.utils.utcnow()
+        )
+        public_embed.add_field(name="Moderator", value=interaction.user.mention, inline=True)
+        if self.duration:
+            public_embed.add_field(name="Duration", value=f"` {self.duration} `", inline=True)
+        public_embed.add_field(name="Reason", value=f"` {self.reason} `", inline=False)
+
+        await interaction.channel.send(embed=public_embed, silent=False)
+
+    async def cancel_callback(self, interaction: discord.Interaction):
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+
+        cancel_embed = discord.Embed(
+            title=f"Bulk {self.action_type.capitalize()} Cancelled — {interaction.guild.name}",
+            description="❌ No actions were performed.",
+            color=discord.Color.from_rgb(255, 255, 255),
+            timestamp=discord.utils.utcnow()
+        )
+        if interaction.guild.icon:
+            cancel_embed.set_thumbnail(url=interaction.guild.icon.url)
+
+        cancel_embed.set_footer(text="Action cancelled by moderator.")
+        await interaction.response.edit_message(embed=cancel_embed, view=self)
 
 
 @bot.tree.command(name="bulkban", description="Ban multiple users at once using IDs or mentions.")
