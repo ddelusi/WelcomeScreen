@@ -627,22 +627,28 @@ async def bulkban(interaction: discord.Interaction, users: str, reason: str = "N
     user_ids = parse_user_ids(users)
 
     if not user_ids:
-        await interaction.followup.send("No valid user IDs or mentions found.")
+        await interaction.followup.send("No valid user IDs or mentions found.", ephemeral=True)
         return
 
     successful, failed = [], []
     for user_id in user_ids:
         try:
             await interaction.guild.ban(discord.Object(id=user_id), reason=f"{reason} | Executed by {interaction.user}")
-            successful.append(str(user_id))
+            successful.append(f"<@{user_id}>")
         except Exception:
             failed.append(str(user_id))
 
-    await interaction.followup.send(
-        f"**Bulk Ban Results:**\n"
-        f" Selected Users ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
-        f" Failed ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    embed = discord.Embed(
+        title="🔨 Bulk Ban Results",
+        color=discord.Color.red(),
+        timestamp=discord.utils.utcnow()
     )
+    embed.add_field(name=f"Selected Users ({len(successful)})", value=", ".join(successful) if successful else "None", inline=False)
+    embed.add_field(name=f"Failed ({len(failed)})", value=", ".join(failed) if failed else "None", inline=False)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.set_footer(text=f"Moderator: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="bulkkick", description="Kick multiple members at once.")
@@ -652,7 +658,7 @@ async def bulkkick(interaction: discord.Interaction, users: str, reason: str = "
     user_ids = parse_user_ids(users)
 
     if not user_ids:
-        await interaction.followup.send("No valid user IDs or mentions found.")
+        await interaction.followup.send("No valid user IDs or mentions found.", ephemeral=True)
         return
 
     successful, failed = [], []
@@ -664,11 +670,17 @@ async def bulkkick(interaction: discord.Interaction, users: str, reason: str = "
         except Exception:
             failed.append(str(user_id))
 
-    await interaction.followup.send(
-        f"**Bulk Kick Results:**\n"
-        f" Selected Users ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
-        f" Failed ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    embed = discord.Embed(
+        title="👢 Bulk Kick Results",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow()
     )
+    embed.add_field(name=f"Selected Users ({len(successful)})", value=", ".join(successful) if successful else "None", inline=False)
+    embed.add_field(name=f"Failed ({len(failed)})", value=", ".join(failed) if failed else "None", inline=False)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.set_footer(text=f"Moderator: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="bulkmute", description="Timeout multiple members for a set duration (e.g., 1m, 1h, 1d).")
@@ -678,19 +690,19 @@ async def bulkmute(interaction: discord.Interaction, users: str, duration: str, 
     user_ids = parse_user_ids(users)
 
     if not user_ids:
-        await interaction.followup.send("No valid user IDs or mentions found.")
+        await interaction.followup.send("No valid user IDs or mentions found.", ephemeral=True)
         return
 
     seconds = parse_duration(duration)
     if not seconds or seconds <= 0:
         await interaction.followup.send(
-            f"{UNSUCCESSFUL_SPIN} Invalid duration format! Use e.g. `1m`, `1h`, or `1d`."
+            f"{UNSUCCESSFUL_SPIN} Invalid duration format! Use e.g. `1m`, `1h`, or `1d`.", ephemeral=True
         )
         return
 
     if seconds > 28 * 86400:
         await interaction.followup.send(
-            f"{UNSUCCESSFUL_SPIN} Discord timeouts cannot exceed 28 days."
+            f"{UNSUCCESSFUL_SPIN} Discord timeouts cannot exceed 28 days.", ephemeral=True
         )
         return
 
@@ -705,11 +717,17 @@ async def bulkmute(interaction: discord.Interaction, users: str, duration: str, 
         except Exception:
             failed.append(str(user_id))
 
-    await interaction.followup.send(
-        f"**Bulk Mute Results ({duration}):**\n"
-        f" Selected Users ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
-        f" Failed ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    embed = discord.Embed(
+        title=f"🔇 Bulk Mute Results ({duration})",
+        color=discord.Color.gold(),
+        timestamp=discord.utils.utcnow()
     )
+    embed.add_field(name=f"Selected Users ({len(successful)})", value=", ".join(successful) if successful else "None", inline=False)
+    embed.add_field(name=f"Failed ({len(failed)})", value=", ".join(failed) if failed else "None", inline=False)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.set_footer(text=f"Moderator: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="bulkwarn", description="Send a warning message to multiple members.")
@@ -719,7 +737,7 @@ async def bulkwarn(interaction: discord.Interaction, users: str, reason: str):
     user_ids = parse_user_ids(users)
 
     if not user_ids:
-        await interaction.followup.send("No valid user IDs or mentions found.")
+        await interaction.followup.send("No valid user IDs or mentions found.", ephemeral=True)
         return
 
     successful, failed = [], []
@@ -731,11 +749,17 @@ async def bulkwarn(interaction: discord.Interaction, users: str, reason: str):
         except Exception:
             failed.append(str(user_id))
 
-    await interaction.followup.send(
-        f"**Bulk Warn Results:**\n"
-        f" Selected Users ({len(successful)}): {', '.join(successful) if successful else 'None'}\n"
-        f" Failed to DM ({len(failed)}): {', '.join(failed) if failed else 'None'}"
+    embed = discord.Embed(
+        title="⚠️ Bulk Warn Results",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow()
     )
+    embed.add_field(name=f"Selected Users ({len(successful)})", value=", ".join(successful) if successful else "None", inline=False)
+    embed.add_field(name=f"Failed to DM ({len(failed)})", value=", ".join(failed) if failed else "None", inline=False)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.set_footer(text=f"Moderator: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # --- Manual Moderation Commands ---
