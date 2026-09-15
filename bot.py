@@ -647,10 +647,18 @@ class BulkConfirmView(discord.ui.View):
         return True
 
     async def confirm_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
         self.stop()
         for item in self.children:
             item.disabled = True
+
+        # Immediately respond to prevent "bot is thinking" timeouts on large lists
+        processing_embed = discord.Embed(
+            title=f"⏳ Processing Bulk {self.action_type.capitalize()}...",
+            description=f"Executing bulk action on **{len(self.user_ids)}** user(s). Please wait...",
+            color=discord.Color.from_rgb(255, 255, 255),
+            timestamp=discord.utils.utcnow()
+        )
+        await interaction.response.edit_message(embed=processing_embed, view=self)
 
         successful, failed = [], []
 
@@ -691,6 +699,7 @@ class BulkConfirmView(discord.ui.View):
                 except Exception:
                     failed.append(str(uid))
 
+        # Update the original ephemeral embed upon completion
         result_embed = discord.Embed(
             title=f"Bulk {self.action_type.capitalize()} Executed — {interaction.guild.name}",
             color=discord.Color.from_rgb(255, 255, 255),
@@ -700,6 +709,9 @@ class BulkConfirmView(discord.ui.View):
             result_embed.set_thumbnail(url=interaction.guild.icon.url)
 
         user_list_str = "\n".join([f"• {u}" for u in successful]) if successful else "• None"
+        if len(user_list_str) > 1024:
+            user_list_str = user_list_str[:1000] + f"\n...and {len(successful) - user_list_str[:1000].count('•')} more"
+
         result_embed.add_field(name=f"Selected Users ({len(successful)}):", value=user_list_str, inline=False)
         if self.duration:
             result_embed.add_field(name="Duration", value=f"` {self.duration} `", inline=True)
@@ -711,12 +723,19 @@ class BulkConfirmView(discord.ui.View):
         result_embed.set_footer(text="Action completed.")
         await interaction.edit_original_response(embed=result_embed, view=self)
 
+        # Public channel message containing targeted user mentions
         public_embed = discord.Embed(
             title=f"✅ Bulk {self.action_type.capitalize()} Completed",
             description=f"Successfully executed **bulk {self.action_type}** on **{len(successful)}** user(s).",
             color=discord.Color.from_rgb(255, 255, 255),
             timestamp=discord.utils.utcnow()
         )
+
+        public_user_list = ", ".join(successful) if successful else "None"
+        if len(public_user_list) > 1024:
+            public_user_list = public_user_list[:1000] + "... (truncated)"
+
+        public_embed.add_field(name="Targeted Users", value=public_user_list, inline=False)
         public_embed.add_field(name="Moderator", value=interaction.user.mention, inline=True)
         if self.duration:
             public_embed.add_field(name="Duration", value=f"` {self.duration} `", inline=True)
