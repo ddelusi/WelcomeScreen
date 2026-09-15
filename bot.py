@@ -1542,4 +1542,49 @@ async def cat(interaction: discord.Interaction, type: app_commands.Choice[str] =
         await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} An error occurred while fetching the cat image.")
 
 
+@bot.tree.command(name="dog", description="Send a random cute dog image or GIF!")
+@app_commands.choices(
+    type=[
+        app_commands.Choice(name="🐶 Random (Image or GIF)", value="both"),
+        app_commands.Choice(name="🖼️ Image Only", value="jpg,png"),
+        app_commands.Choice(name="🎬 GIF Only", value="gif"),
+    ]
+)
+async def dog(interaction: discord.Interaction, type: app_commands.Choice[str] = None):
+    await interaction.response.defer()
+
+    mime_types = type.value if type else "both"
+    url = "https://api.thedogapi.com/v1/images/search"
+    params = {}
+    if mime_types != "both":
+        params["mime_types"] = mime_types
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params, timeout=5) as response:
+                if response.status != 200:
+                    await interaction.followup.send(
+                        f"{UNSUCCESSFUL_SPIN} Failed to fetch a dog image from the API. Try again later!")
+                    return
+
+                data = await response.json()
+                if not data:
+                    await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} No dog images found.")
+                    return
+
+                image_url = data[0]["url"]
+
+        embed = discord.Embed(
+            title="🐶 Here's a dog for you!",
+            color=discord.Color.from_rgb(255, 255, 255),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_image(url=image_url)
+        embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+
+        await interaction.followup.send(embed=embed)
+
+    except Exception:
+        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} An error occurred while fetching the dog image.")
+
 bot.run(TOKEN)
