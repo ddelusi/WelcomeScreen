@@ -621,7 +621,8 @@ def parse_duration(duration_str: str) -> int:
 # --- Bulk Moderation Commands ---
 
 class BulkConfirmView(discord.ui.View):
-    def __init__(self, action_type: str, user_ids: list[int], duration: str = None, reason: str = "No reason provided", author_id: int = None):
+    def __init__(self, action_type: str, user_ids: list[int], duration: str = None, reason: str = "No reason provided",
+                 author_id: int = None):
         super().__init__(timeout=60)
         self.action_type = action_type.lower()
         self.user_ids = user_ids
@@ -642,7 +643,9 @@ class BulkConfirmView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.author_id and interaction.user.id != self.author_id:
-            await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Only the moderator who ran this command can interact with these buttons.", ephemeral=True)
+            await interaction.response.send_message(
+                f"{UNSUCCESSFUL_SPIN} Only the moderator who ran this command can interact with these buttons.",
+                ephemeral=True)
             return False
         return True
 
@@ -665,7 +668,8 @@ class BulkConfirmView(discord.ui.View):
         if self.action_type == "ban":
             for uid in self.user_ids:
                 try:
-                    await interaction.guild.ban(discord.Object(id=uid), reason=f"{self.reason} | Executed by {interaction.user}")
+                    await interaction.guild.ban(discord.Object(id=uid),
+                                                reason=f"{self.reason} | Executed by {interaction.user}")
                     successful.append(f"<@{uid}>")
                 except Exception:
                     failed.append(str(uid))
@@ -881,6 +885,7 @@ async def bulkwarn(interaction: discord.Interaction, users: str, reason: str):
 
     view = BulkConfirmView("Warn", user_ids, reason=reason, author_id=interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
 
 # --- Manual Moderation Commands ---
 
@@ -1467,7 +1472,8 @@ async def clearwarnings(interaction: discord.Interaction, member: discord.Member
 
     await interaction.response.send_message(embed=embed)
     await log_action(interaction.guild, "Warnings Cleared",
-                     f"**Selected User:** {member.mention}\n**Cleared By:** {interaction.user.mention}", discord.Color.green())
+                     f"**Selected User:** {member.mention}\n**Cleared By:** {interaction.user.mention}",
+                     discord.Color.green())
 
 
 @bot.tree.command(name="addemote", description="Add an external emoji to the server")
@@ -1486,6 +1492,54 @@ async def addemote(interaction: discord.Interaction, name: str, url: str):
         await interaction.followup.send(f"{SUCCESSFUL_SPIN} Added emoji {new_emoji} (`:{name}:`)!")
     except discord.HTTPException as e:
         await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Failed to add emoji: {e}")
+
+
+# --- Fun / Utility Commands ---
+
+@bot.tree.command(name="cat", description="Send a random cute cat image or GIF!")
+@app_commands.choices(
+    type=[
+        app_commands.Choice(name="🐱 Random (Image or GIF)", value="both"),
+        app_commands.Choice(name="🖼️ Image Only", value="jpg,png"),
+        app_commands.Choice(name="🎬 GIF Only", value="gif"),
+    ]
+)
+async def cat(interaction: discord.Interaction, type: app_commands.Choice[str] = None):
+    await interaction.response.defer()
+
+    mime_types = type.value if type else "both"
+    url = "https://api.thecatapi.com/v1/images/search"
+    params = {}
+    if mime_types != "both":
+        params["mime_types"] = mime_types
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params, timeout=5) as response:
+                if response.status != 200:
+                    await interaction.followup.send(
+                        f"{UNSUCCESSFUL_SPIN} Failed to fetch a cat image from the API. Try again later!")
+                    return
+
+                data = await response.json()
+                if not data:
+                    await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} No cat images found.")
+                    return
+
+                image_url = data[0]["url"]
+
+        embed = discord.Embed(
+            title="🐾 Here's a cat for you!",
+            color=discord.Color.from_rgb(255, 255, 255),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_image(url=image_url)
+        embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+
+        await interaction.followup.send(embed=embed)
+
+    except Exception:
+        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} An error occurred while fetching the cat image.")
 
 
 bot.run(TOKEN)
