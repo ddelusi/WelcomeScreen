@@ -1,7 +1,6 @@
 import os
 import io
 import json
-import threading
 import time
 import asyncio
 import random
@@ -12,35 +11,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
-from flask import Flask
-import requests
-
-# --- Keep-Alive Web Server Setup for Render Free Tier ---
-flask_app = Flask('')
-
-
-@flask_app.route('/')
-def home():
-    return "Bot is online and active!"
-
-
-def run_flask():
-    flask_app.run(host='0.0.0.0', port=8080)
-
-
-def keep_alive_ping():
-    time.sleep(20)
-    while True:
-        try:
-            requests.get("https://welcomescreen-4ulq.onrender.com")
-        except Exception:
-            pass
-        time.sleep(600)  # Pings every 10 minutes
-
-
-# Run web server in background threads
-threading.Thread(target=run_flask, daemon=True).start()
-threading.Thread(target=keep_alive_ping, daemon=True).start()
 
 # --- Discord Bot Setup ---
 load_dotenv()
