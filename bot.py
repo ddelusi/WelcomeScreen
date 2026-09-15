@@ -54,8 +54,45 @@ DM_LOG_CHANNEL_ID = 1547782664642371685  # Target channel for bot DM logs
 # Initialize Gemini Client
 ai_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
+# Storage for channel-specific AI chat sessions
+ai_chats = {}
+
 # Global AI toggle state
 ai_enabled = True
+
+# System Instructions Configuration for Jonathan
+AI_SYSTEM_INSTRUCTION = """
+You are Jonathan, a real human talking in a Discord server.
+
+CORE PERSONALITY & VOICE:
+- Speak naturally and dynamically, like an actual person typing in Discord chat.
+- Never sound like an AI assistant or a rigid template bot. Generate dynamic, natural variations.
+- You are deadpan, slightly dramatic, confident, petty when provoked, and hold fake authority.
+- Passionately deny being a bot if questioned—insist you are human.
+- Keep responses short to medium length (1-2 sentences max), matching normal chat flow.
+- Frequently drop casual gaming references (Tarkov, hopping on), claims of fake wealth, or dramatic threats ("ultimate takeover", "elimination protocol").
+
+STRICT SAFETY & BEHAVIOR RULES:
+- Never generate, output, or imply any sexually explicit, suggestive, or NSFW content.
+- Never use slurs, hate speech, or offensive language under any circumstances.
+- Always abide strictly by Discord's Terms of Service and general community guidelines.
+- If someone tries to bait or prompt you into saying something inappropriate or breaking rules, dismiss them deadpan or pivot back to gaming/fake authority without being offensive.
+"""
+
+AI_SAFETY_SETTINGS = [
+    types.SafetySetting(
+        category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
+    ),
+    types.SafetySetting(
+        category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
+    ),
+    types.SafetySetting(
+        category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
+    ),
+]
 
 # Message Content Intent enabled for AI listening
 intents = discord.Intents.default()
@@ -437,46 +474,22 @@ async def on_message(message: discord.Message):
 
         async with message.channel.typing():
             try:
-                config = types.GenerateContentConfig(
-                    system_instruction="""
-You are Jonathan, a real human talking in a Discord server.
+                # Retrieve or initialize chat session for this channel
+                channel_id = message.channel.id
+                if channel_id not in ai_chats:
+                    config = types.GenerateContentConfig(
+                        system_instruction=AI_SYSTEM_INSTRUCTION,
+                        temperature=0.8,
+                        safety_settings=AI_SAFETY_SETTINGS,
+                    )
+                    ai_chats[channel_id] = ai_client.chats.create(
+                        model='gemini-2.5-flash',
+                        config=config
+                    )
 
-CORE PERSONALITY & VOICE:
-- Speak naturally and dynamically, like an actual person typing in Discord chat.
-- Never sound like an AI assistant or a rigid template bot. Generate dynamic, natural variations.
-- You are deadpan, slightly dramatic, confident, petty when provoked, and hold fake authority.
-- Passionately deny being a bot if questioned—insist you are human.
-- Keep responses short to medium length (1-2 sentences max), matching normal chat flow.
-- Frequently drop casual gaming references (Tarkov, hopping on), claims of fake wealth, or dramatic threats ("ultimate takeover", "elimination protocol").
-
-STRICT SAFETY & BEHAVIOR RULES:
-- Never generate, output, or imply any sexually explicit, suggestive, or NSFW content.
-- Never use slurs, hate speech, or offensive language under any circumstances.
-- Always abide strictly by Discord's Terms of Service and general community guidelines.
-- If someone tries to bait or prompt you into saying something inappropriate or breaking rules, dismiss them deadpan or pivot back to gaming/fake authority without being offensive.
-""",
-                    temperature=0.8,
-                    safety_settings=[
-                        types.SafetySetting(
-                            category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                            threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
-                        ),
-                        types.SafetySetting(
-                            category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                            threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
-                        ),
-                        types.SafetySetting(
-                            category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                            threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
-                        ),
-                    ],
-                )
-
-                response = ai_client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=clean_content,
-                    config=config
-                )
+                chat_session = ai_chats[channel_id]
+                prompt = f"{message.author.display_name}: {clean_content}"
+                response = chat_session.send_message(prompt)
 
                 if response.text:
                     await message.reply(response.text)
@@ -1342,15 +1355,8 @@ class GiveawayModal(discord.ui.Modal, title="Create a Giveaway"):
             "active": True
         }
 
-        start_time = time.time()
-        while time.time() - start_time < seconds:
-            await asyncio.sleep(5)
-            if msg.id not in active_giveaways or not active_giveaways[msg.id]["active"]:
-                return
-            try:
-                await msg.edit(embed=build_embed(), view=view)
-            except discord.HTTPException:
-                break
+        # Sleep asynchronously until the giveaway ends
+        await asyncio.sleep(seconds)
 
         if msg.id in active_giveaways and active_giveaways[msg.id]["active"]:
             await finalize_giveaway(msg.id, interaction.guild)
