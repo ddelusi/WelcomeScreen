@@ -620,25 +620,103 @@ def parse_duration(duration_str: str) -> int:
 
 # --- Bulk Moderation Commands ---
 
+class BulkConfirmView(discord.ui.View):
+    def __init__(self, action_type: str, user_ids: list[int], duration: str = None, reason: str = "No reason provided", author_id: int = None):
+        super().__init__(timeout=60)
+        self.action_type = action_type.lower()
+        self.user_ids = user_ids
+        self.duration = duration
+        self.reason = reason
+        self.author_id = author_id
+
+        # Red primary action button matching the screenshot style
+        button_label = f"{action_type.capitalize()} All"
+        self.confirm_button = discord.ui.Button(label=button_label, style=discord.ButtonStyle.red)
+        self.confirm_button.callback = self.confirm_callback
+        self.add_item(self.confirm_button)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self.author_id and interaction.user.id != self.author_id:
+            await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} Only the moderator who ran this command can confirm.", ephemeral=True)
+            return False
+        return True
+
+    async def confirm_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+
+        successful, failed = [], []
+
+        if self.action_type == "ban":
+            for uid in self.user_ids:
+                try:
+                    await interaction.guild.ban(discord.Object(id=uid), reason=f"{self.reason} | Executed by {interaction.user}")
+                    successful.append(f"<@{uid}>")
+                except Exception:
+                    failed.append(str(uid))
+
+        elif self.action_type == "kick":
+            for uid in self.user_ids:
+                try:
+                    member = await interaction.guild.fetch_member(uid)
+                    await member.kick(reason=f"{self.reason} | Executed by {interaction.user}")
+                    successful.append(member.mention)
+                except Exception:
+                    failed.append(str(uid))
+
+        elif self.action_type == "mute":
+            seconds = parse_duration(self.duration)
+            timeout_delta = timedelta(seconds=seconds)
+            for uid in self.user_ids:
+                try:
+                    member = await interaction.guild.fetch_member(uid)
+                    await member.timeout(timeout_delta, reason=f"{self.reason} | Executed by {interaction.user}")
+                    successful.append(member.mention)
+                except Exception:
+                    failed.append(str(uid))
+
+        elif self.action_type == "warn":
+            for uid in self.user_ids:
+                try:
+                    member = await interaction.guild.fetch_member(uid)
+                    await member.send(f"⚠️ **Warning from {interaction.guild.name}**: {self.reason}")
+                    successful.append(member.mention)
+                except Exception:
+                    failed.append(str(uid))
+
+        result_embed = discord.Embed(
+            title=f"Bulk {self.action_type.capitalize()} Executed — {interaction.guild.name}",
+            color=discord.Color.from_rgb(255, 255, 255),
+            timestamp=discord.utils.utcnow()
+        )
+        if interaction.guild.icon:
+            result_embed.set_thumbnail(url=interaction.guild.icon.url)
+
+        user_list_str = "\n".join([f"• {u}" for u in successful]) if successful else "• None"
+        result_embed.add_field(name=f"Selected Users ({len(successful)}):", value=user_list_str, inline=False)
+        if self.duration:
+            result_embed.add_field(name="Duration", value=f"` {self.duration} `", inline=True)
+        result_embed.add_field(name="Reason", value=f"` {self.reason} `", inline=False)
+
+        if failed:
+            result_embed.add_field(name="Failed IDs", value=", ".join(failed), inline=False)
+
+        result_embed.set_footer(text="Action completed.")
+        await interaction.edit_original_response(embed=result_embed, view=self)
+
+
 @bot.tree.command(name="bulkban", description="Ban multiple users at once using IDs or mentions.")
 @app_commands.checks.has_permissions(ban_members=True)
 async def bulkban(interaction: discord.Interaction, users: str, reason: str = "No reason provided"):
-    await interaction.response.defer(ephemeral=True)
     user_ids = parse_user_ids(users)
-
     if not user_ids:
-        await interaction.followup.send("No valid user IDs or mentions found.", ephemeral=True)
+        await interaction.response.send_message("No valid user IDs or mentions found.", ephemeral=True)
         return
 
-    successful, failed = [], []
-    for user_id in user_ids:
-        try:
-            await interaction.guild.ban(discord.Object(id=user_id), reason=f"{reason} | Executed by {interaction.user}")
-            successful.append(f"<@{user_id}>")
-        except Exception:
-            failed.append(str(user_id))
-
-    user_list_str = "\n".join([f"• {u}" for u in successful]) if successful else "• None"
+    user_mentions = [f"<@{uid}>" for uid in user_ids]
+    user_list_str = "\n".join([f"• {u}" for u in user_mentions])
 
     embed = discord.Embed(
         title=f"Bulk Ban Confirmation — {interaction.guild.name}",
@@ -648,36 +726,24 @@ async def bulkban(interaction: discord.Interaction, users: str, reason: str = "N
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
 
-    embed.add_field(name=f"Selected Users ({len(successful)}):", value=user_list_str, inline=False)
+    embed.add_field(name=f"Selected Users ({len(user_ids)}):", value=user_list_str, inline=False)
     embed.add_field(name="Reason", value=f"` {reason} `", inline=False)
-    if failed:
-        embed.add_field(name="Failed IDs", value=", ".join(failed), inline=False)
-
     embed.set_footer(text="Ensure bot role is positioned higher than target members.")
 
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    view = BulkConfirmView("Ban", user_ids, reason=reason, author_id=interaction.user.id)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 @bot.tree.command(name="bulkkick", description="Kick multiple members at once.")
 @app_commands.checks.has_permissions(kick_members=True)
 async def bulkkick(interaction: discord.Interaction, users: str, reason: str = "No reason provided"):
-    await interaction.response.defer(ephemeral=True)
     user_ids = parse_user_ids(users)
-
     if not user_ids:
-        await interaction.followup.send("No valid user IDs or mentions found.", ephemeral=True)
+        await interaction.response.send_message("No valid user IDs or mentions found.", ephemeral=True)
         return
 
-    successful, failed = [], []
-    for user_id in user_ids:
-        try:
-            member = await interaction.guild.fetch_member(user_id)
-            await member.kick(reason=f"{reason} | Executed by {interaction.user}")
-            successful.append(member.mention)
-        except Exception:
-            failed.append(str(user_id))
-
-    user_list_str = "\n".join([f"• {u}" for u in successful]) if successful else "• None"
+    user_mentions = [f"<@{uid}>" for uid in user_ids]
+    user_list_str = "\n".join([f"• {u}" for u in user_mentions])
 
     embed = discord.Embed(
         title=f"Bulk Kick Confirmation — {interaction.guild.name}",
@@ -687,51 +753,37 @@ async def bulkkick(interaction: discord.Interaction, users: str, reason: str = "
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
 
-    embed.add_field(name=f"Selected Users ({len(successful)}):", value=user_list_str, inline=False)
+    embed.add_field(name=f"Selected Users ({len(user_ids)}):", value=user_list_str, inline=False)
     embed.add_field(name="Reason", value=f"` {reason} `", inline=False)
-    if failed:
-        embed.add_field(name="Failed IDs", value=", ".join(failed), inline=False)
-
     embed.set_footer(text="Ensure bot role is positioned higher than target members.")
 
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    view = BulkConfirmView("Kick", user_ids, reason=reason, author_id=interaction.user.id)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 @bot.tree.command(name="bulkmute", description="Timeout multiple members for a set duration (e.g., 1m, 1h, 1d).")
 @app_commands.checks.has_permissions(moderate_members=True)
 async def bulkmute(interaction: discord.Interaction, users: str, duration: str, reason: str = "No reason provided"):
-    await interaction.response.defer(ephemeral=True)
     user_ids = parse_user_ids(users)
-
     if not user_ids:
-        await interaction.followup.send("No valid user IDs or mentions found.", ephemeral=True)
+        await interaction.response.send_message("No valid user IDs or mentions found.", ephemeral=True)
         return
 
     seconds = parse_duration(duration)
     if not seconds or seconds <= 0:
-        await interaction.followup.send(
+        await interaction.response.send_message(
             f"{UNSUCCESSFUL_SPIN} Invalid duration format! Use e.g. `1m`, `1h`, or `1d`.", ephemeral=True
         )
         return
 
     if seconds > 28 * 86400:
-        await interaction.followup.send(
+        await interaction.response.send_message(
             f"{UNSUCCESSFUL_SPIN} Discord timeouts cannot exceed 28 days.", ephemeral=True
         )
         return
 
-    timeout_delta = timedelta(seconds=seconds)
-    successful, failed = [], []
-
-    for user_id in user_ids:
-        try:
-            member = await interaction.guild.fetch_member(user_id)
-            await member.timeout(timeout_delta, reason=f"{reason} | Executed by {interaction.user}")
-            successful.append(member.mention)
-        except Exception:
-            failed.append(str(user_id))
-
-    user_list_str = "\n".join([f"• {u}" for u in successful]) if successful else "• None"
+    user_mentions = [f"<@{uid}>" for uid in user_ids]
+    user_list_str = "\n".join([f"• {u}" for u in user_mentions])
 
     embed = discord.Embed(
         title=f"Bulk Mute Confirmation — {interaction.guild.name}",
@@ -741,37 +793,25 @@ async def bulkmute(interaction: discord.Interaction, users: str, duration: str, 
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
 
-    embed.add_field(name=f"Selected Users ({len(successful)}):", value=user_list_str, inline=False)
+    embed.add_field(name=f"Selected Users ({len(user_ids)}):", value=user_list_str, inline=False)
     embed.add_field(name="Duration", value=f"` {duration} `", inline=True)
     embed.add_field(name="Reason", value=f"` {reason} `", inline=False)
-    if failed:
-        embed.add_field(name="Failed IDs", value=", ".join(failed), inline=False)
-
     embed.set_footer(text="Ensure bot role is positioned higher than target members.")
 
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    view = BulkConfirmView("Mute", user_ids, duration=duration, reason=reason, author_id=interaction.user.id)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 @bot.tree.command(name="bulkwarn", description="Send a warning message to multiple members.")
 @app_commands.checks.has_permissions(manage_messages=True)
 async def bulkwarn(interaction: discord.Interaction, users: str, reason: str):
-    await interaction.response.defer(ephemeral=True)
     user_ids = parse_user_ids(users)
-
     if not user_ids:
-        await interaction.followup.send("No valid user IDs or mentions found.", ephemeral=True)
+        await interaction.response.send_message("No valid user IDs or mentions found.", ephemeral=True)
         return
 
-    successful, failed = [], []
-    for user_id in user_ids:
-        try:
-            member = await interaction.guild.fetch_member(user_id)
-            await member.send(f"⚠️ **Warning from {interaction.guild.name}**: {reason}")
-            successful.append(member.mention)
-        except Exception:
-            failed.append(str(user_id))
-
-    user_list_str = "\n".join([f"• {u}" for u in successful]) if successful else "• None"
+    user_mentions = [f"<@{uid}>" for uid in user_ids]
+    user_list_str = "\n".join([f"• {u}" for u in user_mentions])
 
     embed = discord.Embed(
         title=f"Bulk Warn Confirmation — {interaction.guild.name}",
@@ -781,14 +821,12 @@ async def bulkwarn(interaction: discord.Interaction, users: str, reason: str):
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
 
-    embed.add_field(name=f"Selected Users ({len(successful)}):", value=user_list_str, inline=False)
+    embed.add_field(name=f"Selected Users ({len(user_ids)}):", value=user_list_str, inline=False)
     embed.add_field(name="Reason", value=f"` {reason} `", inline=False)
-    if failed:
-        embed.add_field(name="Failed to DM", value=", ".join(failed), inline=False)
-
     embed.set_footer(text="Ensure bot role is positioned higher than target members.")
 
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    view = BulkConfirmView("Warn", user_ids, reason=reason, author_id=interaction.user.id)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 # --- Manual Moderation Commands ---
 
