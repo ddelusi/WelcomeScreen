@@ -638,15 +638,22 @@ async def bulkban(interaction: discord.Interaction, users: str, reason: str = "N
         except Exception:
             failed.append(str(user_id))
 
+    user_list_str = "\n".join([f"• {u}" for u in successful]) if successful else "• None"
+
     embed = discord.Embed(
-        title="🔨 Bulk Ban Results",
-        color=discord.Color.red(),
+        title=f"Bulk Ban Confirmation — {interaction.guild.name}",
+        color=discord.Color.from_rgb(255, 255, 255),
         timestamp=discord.utils.utcnow()
     )
-    embed.add_field(name=f"Selected Users ({len(successful)})", value=", ".join(successful) if successful else "None", inline=False)
-    embed.add_field(name=f"Failed ({len(failed)})", value=", ".join(failed) if failed else "None", inline=False)
-    embed.add_field(name="Reason", value=reason, inline=False)
-    embed.set_footer(text=f"Moderator: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+    if interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+
+    embed.add_field(name=f"Selected Users ({len(successful)}):", value=user_list_str, inline=False)
+    embed.add_field(name="Reason", value=f"` {reason} `", inline=False)
+    if failed:
+        embed.add_field(name="Failed IDs", value=", ".join(failed), inline=False)
+
+    embed.set_footer(text="Ensure bot role is positioned higher than target members.")
 
     await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -670,15 +677,22 @@ async def bulkkick(interaction: discord.Interaction, users: str, reason: str = "
         except Exception:
             failed.append(str(user_id))
 
+    user_list_str = "\n".join([f"• {u}" for u in successful]) if successful else "• None"
+
     embed = discord.Embed(
-        title="👢 Bulk Kick Results",
-        color=discord.Color.orange(),
+        title=f"Bulk Kick Confirmation — {interaction.guild.name}",
+        color=discord.Color.from_rgb(255, 255, 255),
         timestamp=discord.utils.utcnow()
     )
-    embed.add_field(name=f"Selected Users ({len(successful)})", value=", ".join(successful) if successful else "None", inline=False)
-    embed.add_field(name=f"Failed ({len(failed)})", value=", ".join(failed) if failed else "None", inline=False)
-    embed.add_field(name="Reason", value=reason, inline=False)
-    embed.set_footer(text=f"Moderator: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+    if interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+
+    embed.add_field(name=f"Selected Users ({len(successful)}):", value=user_list_str, inline=False)
+    embed.add_field(name="Reason", value=f"` {reason} `", inline=False)
+    if failed:
+        embed.add_field(name="Failed IDs", value=", ".join(failed), inline=False)
+
+    embed.set_footer(text="Ensure bot role is positioned higher than target members.")
 
     await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -717,15 +731,23 @@ async def bulkmute(interaction: discord.Interaction, users: str, duration: str, 
         except Exception:
             failed.append(str(user_id))
 
+    user_list_str = "\n".join([f"• {u}" for u in successful]) if successful else "• None"
+
     embed = discord.Embed(
-        title=f"🔇 Bulk Mute Results ({duration})",
-        color=discord.Color.gold(),
+        title=f"Bulk Mute Confirmation — {interaction.guild.name}",
+        color=discord.Color.from_rgb(255, 255, 255),
         timestamp=discord.utils.utcnow()
     )
-    embed.add_field(name=f"Selected Users ({len(successful)})", value=", ".join(successful) if successful else "None", inline=False)
-    embed.add_field(name=f"Failed ({len(failed)})", value=", ".join(failed) if failed else "None", inline=False)
-    embed.add_field(name="Reason", value=reason, inline=False)
-    embed.set_footer(text=f"Moderator: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+    if interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+
+    embed.add_field(name=f"Selected Users ({len(successful)}):", value=user_list_str, inline=False)
+    embed.add_field(name="Duration", value=f"` {duration} `", inline=True)
+    embed.add_field(name="Reason", value=f"` {reason} `", inline=False)
+    if failed:
+        embed.add_field(name="Failed IDs", value=", ".join(failed), inline=False)
+
+    embed.set_footer(text="Ensure bot role is positioned higher than target members.")
 
     await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -749,18 +771,24 @@ async def bulkwarn(interaction: discord.Interaction, users: str, reason: str):
         except Exception:
             failed.append(str(user_id))
 
+    user_list_str = "\n".join([f"• {u}" for u in successful]) if successful else "• None"
+
     embed = discord.Embed(
-        title="⚠️ Bulk Warn Results",
-        color=discord.Color.orange(),
+        title=f"Bulk Warn Confirmation — {interaction.guild.name}",
+        color=discord.Color.from_rgb(255, 255, 255),
         timestamp=discord.utils.utcnow()
     )
-    embed.add_field(name=f"Selected Users ({len(successful)})", value=", ".join(successful) if successful else "None", inline=False)
-    embed.add_field(name=f"Failed to DM ({len(failed)})", value=", ".join(failed) if failed else "None", inline=False)
-    embed.add_field(name="Reason", value=reason, inline=False)
-    embed.set_footer(text=f"Moderator: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+    if interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+
+    embed.add_field(name=f"Selected Users ({len(successful)}):", value=user_list_str, inline=False)
+    embed.add_field(name="Reason", value=f"` {reason} `", inline=False)
+    if failed:
+        embed.add_field(name="Failed to DM", value=", ".join(failed), inline=False)
+
+    embed.set_footer(text="Ensure bot role is positioned higher than target members.")
 
     await interaction.followup.send(embed=embed, ephemeral=True)
-
 
 # --- Manual Moderation Commands ---
 
