@@ -155,6 +155,7 @@ async def apply_damage_and_punish(guild: discord.Guild, member: discord.Member, 
                 timestamp=discord.utils.utcnow()
             )
             dm_embed.add_field(name="Reason", value=reason, inline=False)
+            dm_embed.set_footer(text=f"Moderator: {moderator.display_name}")
             await send_user_dm(member, dm_embed)
 
             await member.ban(reason=f"Reached {current_damage} damage points (Auto-ban). Last reason: {reason}")
@@ -178,6 +179,7 @@ async def apply_damage_and_punish(guild: discord.Guild, member: discord.Member, 
                         color=discord.Color.green(),
                         timestamp=discord.utils.utcnow()
                     )
+                    dm_embed.set_footer(text=f"Moderator: {moderator.display_name}")
                     await send_user_dm(member, dm_embed)
                 except discord.Forbidden:
                     punishment_text = "⚠️ Damage lowered, but I lack permission to remove active timeout."
@@ -207,6 +209,7 @@ async def apply_damage_and_punish(guild: discord.Guild, member: discord.Member, 
                         timestamp=discord.utils.utcnow()
                     )
                     dm_embed.add_field(name="Reason", value=reason, inline=False)
+                    dm_embed.set_footer(text=f"Moderator: {moderator.display_name}")
                     await send_user_dm(member, dm_embed)
 
                     await log_action(
@@ -668,6 +671,20 @@ class BulkConfirmView(discord.ui.View):
         if self.action_type == "ban":
             for uid in self.user_ids:
                 try:
+                    user_obj = await bot.fetch_user(uid)
+                    dm_embed = discord.Embed(
+                        title=f"🔨 Banned from {interaction.guild.name}",
+                        description="You have been bulk banned by a moderator.",
+                        color=discord.Color.red(),
+                        timestamp=discord.utils.utcnow()
+                    )
+                    dm_embed.add_field(name="Reason", value=self.reason, inline=False)
+                    dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
+                    await send_user_dm(user_obj, dm_embed)
+                except Exception:
+                    pass
+
+                try:
                     await interaction.guild.ban(discord.Object(id=uid),
                                                 reason=f"{self.reason} | Executed by {interaction.user}")
                     successful.append(f"<@{uid}>")
@@ -678,6 +695,16 @@ class BulkConfirmView(discord.ui.View):
             for uid in self.user_ids:
                 try:
                     member = await interaction.guild.fetch_member(uid)
+                    dm_embed = discord.Embed(
+                        title=f"👢 Kicked from {interaction.guild.name}",
+                        description="You have been bulk kicked by a moderator.",
+                        color=discord.Color.orange(),
+                        timestamp=discord.utils.utcnow()
+                    )
+                    dm_embed.add_field(name="Reason", value=self.reason, inline=False)
+                    dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
+                    await send_user_dm(member, dm_embed)
+
                     await member.kick(reason=f"{self.reason} | Executed by {interaction.user}")
                     successful.append(member.mention)
                 except Exception:
@@ -689,6 +716,16 @@ class BulkConfirmView(discord.ui.View):
             for uid in self.user_ids:
                 try:
                     member = await interaction.guild.fetch_member(uid)
+                    dm_embed = discord.Embed(
+                        title=f"🔇 Muted in {interaction.guild.name}",
+                        description=f"You have been bulk muted for **{self.duration}**.",
+                        color=discord.Color.gold(),
+                        timestamp=discord.utils.utcnow()
+                    )
+                    dm_embed.add_field(name="Reason", value=self.reason, inline=False)
+                    dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
+                    await send_user_dm(member, dm_embed)
+
                     await member.timeout(timeout_delta, reason=f"{self.reason} | Executed by {interaction.user}")
                     successful.append(member.mention)
                 except Exception:
@@ -698,7 +735,16 @@ class BulkConfirmView(discord.ui.View):
             for uid in self.user_ids:
                 try:
                     member = await interaction.guild.fetch_member(uid)
-                    await member.send(f"⚠️ **Warning from {interaction.guild.name}**: {self.reason}")
+                    dm_embed = discord.Embed(
+                        title=f"⚠️ Warning Received in {interaction.guild.name}",
+                        description="You have received a bulk warning.",
+                        color=discord.Color.orange(),
+                        timestamp=discord.utils.utcnow()
+                    )
+                    dm_embed.add_field(name="Reason", value=self.reason, inline=False)
+                    dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
+                    await send_user_dm(member, dm_embed)
+
                     successful.append(member.mention)
                 except Exception:
                     failed.append(str(uid))
@@ -961,6 +1007,7 @@ async def unmute(interaction: discord.Interaction, member: discord.Member, reaso
         color=discord.Color.green(),
         timestamp=discord.utils.utcnow()
     )
+    dm_embed.add_field(name="Reason", value=reason, inline=False)
     dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
     await send_user_dm(member, dm_embed)
 
@@ -1042,6 +1089,7 @@ async def unban(interaction: discord.Interaction, user_id: str, reason: str = "N
             color=discord.Color.green(),
             timestamp=discord.utils.utcnow()
         )
+        dm_embed.add_field(name="Reason", value=reason, inline=False)
         dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
         await send_user_dm(user, dm_embed)
 
