@@ -15,10 +15,6 @@ from dotenv import load_dotenv
 from flask import Flask
 import requests
 
-# Gemini AI Imports
-from google import genai
-from google.genai import types
-
 # --- Keep-Alive Web Server Setup for Render Free Tier ---
 flask_app = Flask('')
 
@@ -46,58 +42,14 @@ def keep_alive_ping():
 threading.Thread(target=run_flask, daemon=True).start()
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
-# --- Discord & Gemini Bot Setup ---
+# --- Discord Bot Setup ---
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 DM_LOG_CHANNEL_ID = 1547782664642371685  # Target channel for bot DM logs
 
-# Initialize Gemini Client
-ai_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-# Storage for channel-specific AI chat sessions
-ai_chats = {}
-
-# Global AI toggle state
-ai_enabled = True
-
-# System Instructions Configuration for Jonathan
-AI_SYSTEM_INSTRUCTION = """
-You are Jonathan, a real human talking in a Discord server.
-
-CORE PERSONALITY & VOICE:
-- Speak naturally and dynamically, like an actual person typing in Discord chat.
-- Never sound like an AI assistant or a rigid template bot. Generate dynamic, natural variations.
-- You are deadpan, slightly dramatic, confident, petty when provoked, and hold fake authority.
-- Passionately deny being a bot if questioned—insist you are human.
-- Keep responses short to medium length (1-2 sentences max), matching normal chat flow.
-- Frequently drop casual gaming references (Tarkov, hopping on), claims of fake wealth, or dramatic threats ("ultimate takeover", "elimination protocol").
-
-STRICT SAFETY & BEHAVIOR RULES:
-- Never generate, output, or imply any sexually explicit, suggestive, or NSFW content.
-- Never use slurs, hate speech, or offensive language under any circumstances.
-- Always abide strictly by Discord's Terms of Service and general community guidelines.
-- If someone tries to bait or prompt you into saying something inappropriate or breaking rules, dismiss them deadpan or pivot back to gaming/fake authority without being offensive.
-"""
-
-AI_SAFETY_SETTINGS = [
-    types.SafetySetting(
-        category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-        threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
-    ),
-    types.SafetySetting(
-        category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-        threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
-    ),
-    types.SafetySetting(
-        category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-        threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
-    ),
-]
-
-# Message Content Intent enabled for AI listening
+# Message Content Intent removed to comply with Discord policy
 intents = discord.Intents.default()
 intents.members = True
-intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -181,17 +133,6 @@ async def send_user_dm(user: discord.User, embed: discord.Embed):
 async def on_ready():
     await bot.tree.sync()
     print(f"Logged in as {bot.user} (ID: {bot.user.id}) - Globally synced commands across all servers")
-
-
-# --- AI Toggle Command ---
-
-@bot.tree.command(name="aitoggle", description="Turn Jonathan's AI auto-responder on or off.")
-@app_commands.checks.has_permissions(administrator=True)
-async def aitoggle(interaction: discord.Interaction):
-    global ai_enabled
-    ai_enabled = not ai_enabled
-    status = "enabled 🟢" if ai_enabled else "disabled 🔴"
-    await interaction.response.send_message(f"Jonathan's auto-responder is now **{status}**.")
 
 
 # --- Helper Function for Automated Damage & Punishment Thresholds ---
@@ -417,7 +358,6 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # Process DM logging
     if isinstance(message.channel, discord.DMChannel):
         if message.author.id not in seen_dm_users:
             seen_dm_users.add(message.author.id)
@@ -449,53 +389,6 @@ async def on_message(message: discord.Message):
                 embed.add_field(name="Attachments", value=attachment_urls, inline=False)
 
             await log_channel.send(embed=embed)
-        return
-
-    # Allow traditional commands to process
-    await bot.process_commands(message)
-
-    # Stop execution if AI mode is toggled off
-    if not ai_enabled:
-        return
-
-    # Check if Jonathan was @mentioned or if someone replied directly to one of his messages
-    is_mentioned = bot.user in message.mentions
-    is_reply_to_bot = (
-            message.reference
-            and message.reference.resolved
-            and isinstance(message.reference.resolved, discord.Message)
-            and message.reference.resolved.author == bot.user
-    )
-
-    if is_mentioned or is_reply_to_bot:
-        clean_content = message.content.replace(f'<@{bot.user.id}>', '').strip()
-        if not clean_content:
-            clean_content = "yo"
-
-        async with message.channel.typing():
-            try:
-                # Retrieve or initialize chat session for this channel
-                channel_id = message.channel.id
-                if channel_id not in ai_chats:
-                    config = types.GenerateContentConfig(
-                        system_instruction=AI_SYSTEM_INSTRUCTION,
-                        temperature=0.8,
-                        safety_settings=AI_SAFETY_SETTINGS,
-                    )
-                    ai_chats[channel_id] = ai_client.chats.create(
-                        model='gemini-2.5-flash',
-                        config=config
-                    )
-
-                chat_session = ai_chats[channel_id]
-                prompt = f"{message.author.display_name}: {clean_content}"
-                response = chat_session.send_message(prompt)
-
-                if response.text:
-                    await message.reply(response.text)
-
-            except Exception as e:
-                print(f"AI Error: {e}")
 
 
 @bot.event
@@ -737,11 +630,13 @@ class BulkConfirmView(discord.ui.View):
         self.reason = reason
         self.author_id = author_id
 
+        # Red primary action button
         button_label = f"{action_type.capitalize()} All"
         self.confirm_button = discord.ui.Button(label=button_label, style=discord.ButtonStyle.red)
         self.confirm_button.callback = self.confirm_callback
         self.add_item(self.confirm_button)
 
+        # Grey secondary cancel button
         self.cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
         self.cancel_button.callback = self.cancel_callback
         self.add_item(self.cancel_button)
@@ -759,6 +654,7 @@ class BulkConfirmView(discord.ui.View):
         for item in self.children:
             item.disabled = True
 
+        # Immediately respond to prevent "bot is thinking" timeouts on large lists
         processing_embed = discord.Embed(
             title=f"⏳ Processing Bulk {self.action_type.capitalize()}...",
             description=f"Executing bulk action on **{len(self.user_ids)}** user(s). Please wait...",
@@ -807,6 +703,7 @@ class BulkConfirmView(discord.ui.View):
                 except Exception:
                     failed.append(str(uid))
 
+        # Update the original ephemeral embed upon completion
         result_embed = discord.Embed(
             title=f"Bulk {self.action_type.capitalize()} Executed — {interaction.guild.name}",
             color=discord.Color.from_rgb(255, 255, 255),
@@ -830,6 +727,7 @@ class BulkConfirmView(discord.ui.View):
         result_embed.set_footer(text="Action completed.")
         await interaction.edit_original_response(embed=result_embed, view=self)
 
+        # Public channel message containing targeted user mentions
         public_embed = discord.Embed(
             title=f"✅ Bulk {self.action_type.capitalize()} Completed",
             description=f"Successfully executed **bulk {self.action_type}** on **{len(successful)}** user(s).",
@@ -1355,8 +1253,15 @@ class GiveawayModal(discord.ui.Modal, title="Create a Giveaway"):
             "active": True
         }
 
-        # Sleep asynchronously until the giveaway ends
-        await asyncio.sleep(seconds)
+        start_time = time.time()
+        while time.time() - start_time < seconds:
+            await asyncio.sleep(5)
+            if msg.id not in active_giveaways or not active_giveaways[msg.id]["active"]:
+                return
+            try:
+                await msg.edit(embed=build_embed(), view=view)
+            except discord.HTTPException:
+                break
 
         if msg.id in active_giveaways and active_giveaways[msg.id]["active"]:
             await finalize_giveaway(msg.id, interaction.guild)
@@ -1681,6 +1586,5 @@ async def dog(interaction: discord.Interaction, type: app_commands.Choice[str] =
 
     except Exception:
         await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} An error occurred while fetching the dog image.")
-
 
 bot.run(TOKEN)
