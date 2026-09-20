@@ -1197,56 +1197,66 @@ class AdvancedEmbedModal(discord.ui.Modal, title="Create Custom Embed"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        target_channel = interaction.channel
-        channel_raw = self.channel_mention_input.value.strip()
-
-        if channel_raw:
-            cleaned_id = re.sub(r"\D", "", channel_raw)
-            if cleaned_id.isdigit():
-                found_channel = interaction.guild.get_channel(int(cleaned_id))
-                if found_channel and isinstance(found_channel, discord.TextChannel):
-                    target_channel = found_channel
-
-        # Build the First Embed
-        embed1 = discord.Embed(
-            title=self.embed_title.value,
-            description=self.embed_description.value,
-            color=discord.Color.blue()
-        )
-
-        if self.thumbnail_url.value.strip():
-            embed1.set_thumbnail(url=self.thumbnail_url.value.strip())
-
-        embeds_to_send = [embed1]
-
-        # Build the Second Embed if provided (Dual-embed feature)
-        if self.secondary_description.value.strip():
-            embed2 = discord.Embed(
-                description=self.secondary_description.value.strip(),
-                color=discord.Color.dark_blue()
-            )
-            embeds_to_send.append(embed2)
-
-        # Optional: Save preset logic
-        if self.preset_name.value.strip():
-            save_preset(self.preset_name.value.strip(), {
-                "title": self.embed_title.value,
-                "desc1": self.embed_description.value,
-                "desc2": self.secondary_description.value,
-                "thumb": self.thumbnail_url.value
-            })
-
         try:
+            target_channel = interaction.channel
+            channel_raw = self.channel_mention_input.value.strip()
+
+            if channel_raw:
+                cleaned_id = re.sub(r"\D", "", channel_raw)
+                if cleaned_id.isdigit():
+                    found_channel = interaction.guild.get_channel(int(cleaned_id))
+                    if found_channel and isinstance(found_channel, discord.TextChannel):
+                        target_channel = found_channel
+
+            # Build the First Embed
+            embed1 = discord.Embed(
+                title=self.embed_title.value,
+                description=self.embed_description.value,
+                color=discord.Color.blue()
+            )
+
+            if self.thumbnail_url.value.strip():
+                embed1.set_thumbnail(url=self.thumbnail_url.value.strip())
+
+            embeds_to_send = [embed1]
+
+            # Build the Second Embed if provided (Dual-embed feature)
+            if self.secondary_description.value.strip():
+                embed2 = discord.Embed(
+                    description=self.secondary_description.value.strip(),
+                    color=discord.Color.dark_blue()
+                )
+                embeds_to_send.append(embed2)
+
+            # Optional: Save preset logic safely
+            if self.preset_name.value.strip():
+                try:
+                    save_preset(self.preset_name.value.strip(), {
+                        "title": self.embed_title.value,
+                        "desc1": self.embed_description.value,
+                        "desc2": self.secondary_description.value,
+                        "thumb": self.thumbnail_url.value
+                    })
+                except Exception as e:
+                    print(f"Failed to save preset: {e}")
+
             await target_channel.send(embeds=embeds_to_send)
             await interaction.response.send_message(
                 f"{SUCCESSFUL_SPIN} Embed(s) successfully sent to {target_channel.mention}!",
                 ephemeral=True
             )
         except discord.Forbidden:
-            await interaction.response.send_message(
-                f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages in {target_channel.mention}.",
-                ephemeral=True
-            )
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages in that channel.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{UNSUCCESSFUL_SPIN} An unexpected error occurred: {e}",
+                    ephemeral=True
+                )
 
 
 @bot.tree.command(name="embed", description="Opens the form to build and send custom dual-embeds with presets")
