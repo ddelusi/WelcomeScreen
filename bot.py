@@ -1155,7 +1155,7 @@ async def speak(interaction: discord.Interaction, message: str):
                                                 ephemeral=True)
 
 
-# --- Advanced Dual Embed Builder & Presets ---
+# --- Advanced Dual Embed Builder & Presets (Fixed: exactly 5 inputs) ---
 
 class AdvancedEmbedModal(discord.ui.Modal, title="Create Custom Embed"):
     channel_mention_input = discord.ui.TextInput(
@@ -1183,17 +1183,11 @@ class AdvancedEmbedModal(discord.ui.Modal, title="Create Custom Embed"):
         required=False,
         max_length=1000
     )
-    thumbnail_url = discord.ui.TextInput(
-        label="Thumbnail Image URL",
-        placeholder="https://example.com/image.png",
+    thumbnail_and_preset = discord.ui.TextInput(
+        label="Thumbnail URL | Preset Name (Optional)",
+        placeholder="https://example.com/image.png | my_preset",
         required=False,
         max_length=500
-    )
-    preset_name = discord.ui.TextInput(
-        label="Save as Preset? (Optional Name)",
-        placeholder="e.g., update_template",
-        required=False,
-        max_length=50
     )
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -1211,6 +1205,20 @@ class AdvancedEmbedModal(discord.ui.Modal, title="Create Custom Embed"):
                     if found_channel and isinstance(found_channel, discord.TextChannel):
                         target_channel = found_channel
 
+            # Parse Thumbnail and Preset from the combined field
+            thumb_url = ""
+            preset_name = ""
+            combined_val = self.thumbnail_and_preset.value.strip()
+            if combined_val:
+                if "|" in combined_val:
+                    parts = combined_val.split("|", 1)
+                    thumb_url = parts[0].strip()
+                    preset_name = parts[1].strip()
+                elif combined_val.startswith("http"):
+                    thumb_url = combined_val
+                else:
+                    preset_name = combined_val
+
             # Build the First Embed
             embed1 = discord.Embed(
                 title=self.embed_title.value,
@@ -1218,8 +1226,8 @@ class AdvancedEmbedModal(discord.ui.Modal, title="Create Custom Embed"):
                 color=discord.Color.blue()
             )
 
-            if self.thumbnail_url.value.strip():
-                embed1.set_thumbnail(url=self.thumbnail_url.value.strip())
+            if thumb_url:
+                embed1.set_thumbnail(url=thumb_url)
 
             embeds_to_send = [embed1]
 
@@ -1232,13 +1240,13 @@ class AdvancedEmbedModal(discord.ui.Modal, title="Create Custom Embed"):
                 embeds_to_send.append(embed2)
 
             # Optional: Save preset logic safely
-            if self.preset_name.value.strip():
+            if preset_name:
                 try:
-                    save_preset(self.preset_name.value.strip(), {
+                    save_preset(preset_name, {
                         "title": self.embed_title.value,
                         "desc1": self.embed_description.value,
                         "desc2": self.secondary_description.value,
-                        "thumb": self.thumbnail_url.value
+                        "thumb": thumb_url
                     })
                 except Exception as e:
                     print(f"Failed to save preset: {e}")
