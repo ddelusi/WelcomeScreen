@@ -47,7 +47,6 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 DM_LOG_CHANNEL_ID = 1547782664642371685  # Target channel for bot DM logs
 
-# Message Content Intent removed to comply with Discord policy
 intents = discord.Intents.default()
 intents.members = True
 
@@ -1155,105 +1154,127 @@ async def speak(interaction: discord.Interaction, message: str):
                                                 ephemeral=True)
 
 
-# --- Advanced Dual Embed Builder & Presets (Fixed: exactly 5 inputs) ---
+# --- Advanced Custom Embed Builder & Presets (Fully Restored Options) ---
 
-class AdvancedEmbedModal(discord.ui.Modal, title="Create Custom Embed"):
-    channel_mention_input = discord.ui.TextInput(
-        label="Channel (#channel or Channel ID)",
-        placeholder="Ex: #announcements or 1234567890 (leave blank for current)",
+class AdvancedEmbedModal(discord.ui.Modal, title="Advanced Embed Builder"):
+    channel_input = discord.ui.TextInput(
+        label="Channel (#channel or ID) - Optional",
+        placeholder="Leave blank for current channel",
         required=False
     )
-    embed_title = discord.ui.TextInput(
-        label="Embed Title",
-        placeholder="Enter the main title...",
+    title_and_url = discord.ui.TextInput(
+        label="Title | Title Hyperlink URL (Optional)",
+        placeholder="My Title | https://example.com",
         required=True,
         max_length=256
     )
-    embed_description = discord.ui.TextInput(
-        label="Main Description (Embed 1)",
-        placeholder="Enter the primary content...",
+    main_desc = discord.ui.TextInput(
+        label="Main Description",
+        placeholder="Primary text content...",
         style=discord.TextStyle.paragraph,
         required=True,
         max_length=1000
     )
-    secondary_description = discord.ui.TextInput(
-        label="Secondary Content (Embed 2 / Details)",
-        placeholder="Optional footer/extra notes block...",
-        style=discord.TextStyle.paragraph,
+    thumbnail_and_color = discord.ui.TextInput(
+        label="Thumbnail URL | Hex Color (e.g. #FF5733)",
+        placeholder="https://.../image.png | #0099ff",
         required=False,
-        max_length=1000
+        max_length=200
     )
-    thumbnail_and_preset = discord.ui.TextInput(
-        label="Thumbnail URL | Preset Name (Optional)",
-        placeholder="https://example.com/image.png | my_preset",
+    footer_and_preset = discord.ui.TextInput(
+        label="Footer Text | Preset Name to Save (Optional)",
+        placeholder="Powered by Community | my_preset",
         required=False,
-        max_length=500
+        max_length=200
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Acknowledge immediately to prevent the 3-second timeout error
         await interaction.response.defer(ephemeral=True)
 
         try:
             target_channel = interaction.channel
-            channel_raw = self.channel_mention_input.value.strip()
-
+            channel_raw = self.channel_input.value.strip()
             if channel_raw:
                 cleaned_id = re.sub(r"\D", "", channel_raw)
                 if cleaned_id.isdigit():
-                    found_channel = interaction.guild.get_channel(int(cleaned_id))
-                    if found_channel and isinstance(found_channel, discord.TextChannel):
-                        target_channel = found_channel
+                    found_ch = interaction.guild.get_channel(int(cleaned_id))
+                    if isinstance(found_ch, discord.TextChannel):
+                        target_channel = found_ch
 
-            # Parse Thumbnail and Preset from the combined field
-            thumb_url = ""
-            preset_name = ""
-            combined_val = self.thumbnail_and_preset.value.strip()
-            if combined_val:
-                if "|" in combined_val:
-                    parts = combined_val.split("|", 1)
-                    thumb_url = parts[0].strip()
-                    preset_name = parts[1].strip()
-                elif combined_val.startswith("http"):
-                    thumb_url = combined_val
+            # Parse Title & URL
+            title_val = self.title_and_url.value.strip()
+            title_text = title_val
+            title_link = None
+            if "|" in title_val:
+                parts = title_val.split("|", 1)
+                title_text = parts[0].strip()
+                title_link = parts[1].strip() or None
+
+            # Parse Thumbnail & Color
+            thumb_url = None
+            embed_color = discord.Color.blue()
+            tc_val = self.thumbnail_and_color.value.strip()
+            if tc_val:
+                if "|" in tc_val:
+                    t_parts = tc_val.split("|", 1)
+                    thumb_url = t_parts[0].strip() or None
+                    color_str = t_parts[1].strip()
+                    if color_str.startswith("#"):
+                        color_str = color_str.lstrip("#")
+                    try:
+                        embed_color = discord.Color(int(color_str, 16))
+                    except ValueError:
+                        pass
+                elif tc_val.startswith("http"):
+                    thumb_url = tc_val
+                elif tc_val.startswith("#") or len(tc_val) == 6:
+                    try:
+                        embed_color = discord.Color(int(tc_val.lstrip("#"), 16))
+                    except ValueError:
+                        pass
+
+            # Parse Footer & Preset Name
+            footer_text = None
+            preset_name = None
+            fp_val = self.footer_and_preset.value.strip()
+            if fp_val:
+                if "|" in fp_val:
+                    f_parts = fp_val.split("|", 1)
+                    footer_text = f_parts[0].strip() or None
+                    preset_name = f_parts[1].strip() or None
                 else:
-                    preset_name = combined_val
+                    footer_text = fp_val
 
-            # Build the First Embed
-            embed1 = discord.Embed(
-                title=self.embed_title.value,
-                description=self.embed_description.value,
-                color=discord.Color.blue()
+            # Build Embed
+            embed = discord.Embed(
+                title=title_text,
+                url=title_link,
+                description=self.main_desc.value,
+                color=embed_color
             )
 
             if thumb_url:
-                embed1.set_thumbnail(url=thumb_url)
-
-            embeds_to_send = [embed1]
-
-            # Build the Second Embed if provided (Dual-embed feature)
-            if self.secondary_description.value.strip():
-                embed2 = discord.Embed(
-                    description=self.secondary_description.value.strip(),
-                    color=discord.Color.dark_blue()
-                )
-                embeds_to_send.append(embed2)
+                embed.set_thumbnail(url=thumb_url)
+            if footer_text:
+                embed.set_footer(text=footer_text)
 
             # Optional: Save preset logic safely
             if preset_name:
                 try:
                     save_preset(preset_name, {
-                        "title": self.embed_title.value,
-                        "desc1": self.embed_description.value,
-                        "desc2": self.secondary_description.value,
-                        "thumb": thumb_url
+                        "title": title_text,
+                        "url": title_link,
+                        "desc": self.main_desc.value,
+                        "thumb": thumb_url,
+                        "color": str(embed_color.value),
+                        "footer": footer_text
                     })
                 except Exception as e:
                     print(f"Failed to save preset: {e}")
 
-            await target_channel.send(embeds=embeds_to_send)
+            await target_channel.send(embed=embed)
             await interaction.followup.send(
-                f"{SUCCESSFUL_SPIN} Embed(s) successfully sent to {target_channel.mention}!",
+                f"{SUCCESSFUL_SPIN} Custom embed successfully sent to {target_channel.mention}!",
                 ephemeral=True
             )
         except discord.Forbidden:
@@ -1268,7 +1289,7 @@ class AdvancedEmbedModal(discord.ui.Modal, title="Create Custom Embed"):
             )
 
 
-@bot.tree.command(name="embed", description="Opens the form to build and send custom dual-embeds with presets")
+@bot.tree.command(name="embed", description="Opens the form to build and send custom embeds with full styling")
 @app_commands.checks.has_permissions(manage_messages=True)
 async def embed(interaction: discord.Interaction):
     await interaction.response.send_modal(AdvancedEmbedModal())
