@@ -1197,6 +1197,9 @@ class AdvancedEmbedModal(discord.ui.Modal, title="Create Custom Embed"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
+        # Acknowledge immediately to prevent the 3-second timeout error
+        await interaction.response.defer(ephemeral=True)
+
         try:
             target_channel = interaction.channel
             channel_raw = self.channel_mention_input.value.strip()
@@ -1241,22 +1244,20 @@ class AdvancedEmbedModal(discord.ui.Modal, title="Create Custom Embed"):
                     print(f"Failed to save preset: {e}")
 
             await target_channel.send(embeds=embeds_to_send)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"{SUCCESSFUL_SPIN} Embed(s) successfully sent to {target_channel.mention}!",
                 ephemeral=True
             )
         except discord.Forbidden:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages in that channel.",
-                    ephemeral=True
-                )
+            await interaction.followup.send(
+                f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages in that channel.",
+                ephemeral=True
+            )
         except Exception as e:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    f"{UNSUCCESSFUL_SPIN} An unexpected error occurred: {e}",
-                    ephemeral=True
-                )
+            await interaction.followup.send(
+                f"{UNSUCCESSFUL_SPIN} An unexpected error occurred: {e}",
+                ephemeral=True
+            )
 
 
 @bot.tree.command(name="embed", description="Opens the form to build and send custom dual-embeds with presets")
