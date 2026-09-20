@@ -66,6 +66,7 @@ seen_dm_users = set()  # Tracks users who received the one-time DM notice
 
 # --- Persistent JSON Storage for Damage & Warnings ---
 DATA_FILE = "damage_data.json"
+PRESET_FILE = "embed_presets.json"
 
 
 def save_data():
@@ -90,6 +91,19 @@ def load_data():
 
 
 load_data()
+
+
+def save_preset(name, data):
+    presets = {}
+    if os.path.exists(PRESET_FILE):
+        try:
+            with open(PRESET_FILE, "r") as f:
+                presets = json.load(f)
+        except json.JSONDecodeError:
+            presets = {}
+    presets[name] = data
+    with open(PRESET_FILE, "w") as f:
+        json.dump(presets, f, indent=4)
 
 
 def parse_user_ids(raw_input: str) -> list[int]:
@@ -1093,35 +1107,45 @@ async def speak(interaction: discord.Interaction, message: str):
                                                 ephemeral=True)
 
 
-# --- Embed Builder ---
+# --- Advanced Dual Embed Builder & Presets ---
 
-class EmbedModal(discord.ui.Modal, title="Create Custom Embed"):
+class AdvancedEmbedModal(discord.ui.Modal, title="Create Custom Embed"):
     channel_mention_input = discord.ui.TextInput(
         label="Channel (#channel or Channel ID)",
         placeholder="Ex: #announcements or 1234567890 (leave blank for current)",
         required=False
     )
     embed_title = discord.ui.TextInput(
-        label="Title",
-        placeholder="Enter embed title...",
-        required=True
+        label="Embed Title",
+        placeholder="Enter the main title...",
+        required=True,
+        max_length=256
     )
     embed_description = discord.ui.TextInput(
-        label="Description",
+        label="Main Description (Embed 1)",
+        placeholder="Enter the primary content...",
         style=discord.TextStyle.paragraph,
-        placeholder="Enter embed description...",
-        required=True
+        required=True,
+        max_length=1000
     )
-    embed_color = discord.ui.TextInput(
-        label="Color (Hex)",
-        placeholder="Ex: 3498db or #ff0000",
-        default="3498db",
-        required=False
+    secondary_description = discord.ui.TextInput(
+        label="Secondary Content (Embed 2 / Details)",
+        placeholder="Optional footer/extra notes block...",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        max_length=1000
     )
-    embed_image = discord.ui.TextInput(
-        label="Image URL",
+    thumbnail_url = discord.ui.TextInput(
+        label="Thumbnail Image URL",
         placeholder="https://example.com/image.png",
-        required=False
+        required=False,
+        max_length=500
+    )
+    preset_name = discord.ui.TextInput(
+        label="Save as Preset? (Optional Name)",
+        placeholder="e.g., update_template",
+        required=False,
+        max_length=50
     )
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -1135,35 +1159,52 @@ class EmbedModal(discord.ui.Modal, title="Create Custom Embed"):
                 if found_channel and isinstance(found_channel, discord.TextChannel):
                     target_channel = found_channel
 
-        try:
-            color_hex = self.embed_color.value.lstrip('#')
-            color_int = int(color_hex, 16)
-        except ValueError:
-            color_int = 0x3498db
-
-        embed_obj = discord.Embed(
+        # Build the First Embed
+        embed1 = discord.Embed(
             title=self.embed_title.value,
             description=self.embed_description.value,
-            color=discord.Color(color_int)
+            color=discord.Color.blue()
         )
 
-        if self.embed_image.value.strip():
-            embed_obj.set_image(url=self.embed_image.value.strip())
+        if self.thumbnail_url.value.strip():
+            embed1.set_thumbnail(url=self.thumbnail_url.value.strip())
+
+        embeds_to_send = [embed1]
+
+        # Build the Second Embed if provided (Dual-embed feature)
+        if self.secondary_description.value.strip():
+            embed2 = discord.Embed(
+                description=self.secondary_description.value.strip(),
+                color=discord.Color.dark_blue()
+            )
+            embeds_to_send.append(embed2)
+
+        # Optional: Save preset logic
+        if self.preset_name.value.strip():
+            save_preset(self.preset_name.value.strip(), {
+                "title": self.embed_title.value,
+                "desc1": self.embed_description.value,
+                "desc2": self.secondary_description.value,
+                "thumb": self.thumbnail_url.value
+            })
 
         try:
-            await target_channel.send(embed=embed_obj)
+            await target_channel.send(embeds=embeds_to_send)
             await interaction.response.send_message(
-                f"{SUCCESSFUL_SPIN} Embed successfully sent to {target_channel.mention}!", ephemeral=True)
+                f"{SUCCESSFUL_SPIN} Embed(s) successfully sent to {target_channel.mention}!",
+                ephemeral=True
+            )
         except discord.Forbidden:
             await interaction.response.send_message(
                 f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages in {target_channel.mention}.",
-                ephemeral=True)
+                ephemeral=True
+            )
 
 
-@bot.tree.command(name="embed", description="Opens the form to build and send a custom embed")
+@bot.tree.command(name="embed", description="Opens the form to build and send custom dual-embeds with presets")
 @app_commands.checks.has_permissions(manage_messages=True)
 async def embed(interaction: discord.Interaction):
-    await interaction.response.send_modal(EmbedModal())
+    await interaction.response.send_modal(AdvancedEmbedModal())
 
 
 # --- Giveaway System ---
