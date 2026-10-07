@@ -655,7 +655,7 @@ def parse_duration(duration_str: str) -> int:
 class BulkConfirmView(discord.ui.View):
     def __init__(self, action_type: str, user_ids: list[int], duration: str = None, reason: str = "No reason provided",
                  author_id: int = None):
-        super().__init__(timeout=60)
+        super().__init__(timeout=300)
         self.action_type = action_type.lower()
         self.user_ids = user_ids
         self.duration = duration
