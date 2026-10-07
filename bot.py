@@ -115,6 +115,22 @@ def parse_user_ids(raw_input: str) -> list[int]:
     return list(set(ids))
 
 
+def format_user_list(items, sep="\n", prefix="• ", limit=1024):
+    """Makes a list that always fits inside a Discord embed field (max 1024 chars)."""
+    if not items:
+        return f"{prefix}None"
+    out = []
+    used = 0
+    for i, item in enumerate(items):
+        piece = f"{prefix}{item}"
+        if used + len(piece) + len(sep) > limit - 40:
+            out.append(f"...and {len(items) - i} more")
+            break
+        out.append(piece)
+        used += len(piece) + len(sep)
+    return sep.join(out)
+
+
 def get_server_config(guild_id: int) -> dict:
     if guild_id not in server_configs:
         server_configs[guild_id] = {
@@ -771,9 +787,7 @@ class BulkConfirmView(discord.ui.View):
         if interaction.guild.icon:
             result_embed.set_thumbnail(url=interaction.guild.icon.url)
 
-        user_list_str = "\n".join([f"• {u}" for u in successful]) if successful else "• None"
-        if len(user_list_str) > 1024:
-            user_list_str = user_list_str[:1000] + f"\n...and {len(successful) - user_list_str[:1000].count('•')} more"
+        user_list_str = format_user_list(successful)
 
         result_embed.add_field(name=f"Selected Users ({len(successful)}):", value=user_list_str, inline=False)
         if self.duration:
@@ -781,7 +795,8 @@ class BulkConfirmView(discord.ui.View):
         result_embed.add_field(name="Reason", value=f"` {self.reason} `", inline=False)
 
         if failed:
-            result_embed.add_field(name="Failed IDs", value=", ".join(failed), inline=False)
+            result_embed.add_field(name="Failed IDs", value=format_user_list(failed, sep=", ", prefix=""),
+                                   inline=False)
 
         result_embed.set_footer(text="Action completed.")
         await interaction.edit_original_response(embed=result_embed, view=self)
@@ -794,9 +809,7 @@ class BulkConfirmView(discord.ui.View):
             timestamp=discord.utils.utcnow()
         )
 
-        public_user_list = ", ".join(successful) if successful else "None"
-        if len(public_user_list) > 1024:
-            public_user_list = public_user_list[:1000] + "... (truncated)"
+        public_user_list = format_user_list(successful, sep=", ", prefix="")
 
         public_embed.add_field(name="Targeted Users", value=public_user_list, inline=False)
         public_embed.add_field(name="Moderator", value=interaction.user.mention, inline=True)
@@ -832,8 +845,7 @@ async def bulkban(interaction: discord.Interaction, users: str, reason: str = "N
         await interaction.response.send_message("No valid user IDs or mentions found.", ephemeral=True)
         return
 
-    user_mentions = [f"<@{uid}>" for uid in user_ids]
-    user_list_str = "\n".join([f"• {u}" for u in user_mentions])
+    user_list_str = format_user_list([f"<@{uid}>" for uid in user_ids])
 
     embed = discord.Embed(
         title=f"Bulk Ban Confirmation — {interaction.guild.name}",
@@ -859,8 +871,7 @@ async def bulkkick(interaction: discord.Interaction, users: str, reason: str = "
         await interaction.response.send_message("No valid user IDs or mentions found.", ephemeral=True)
         return
 
-    user_mentions = [f"<@{uid}>" for uid in user_ids]
-    user_list_str = "\n".join([f"• {u}" for u in user_mentions])
+    user_list_str = format_user_list([f"<@{uid}>" for uid in user_ids])
 
     embed = discord.Embed(
         title=f"Bulk Kick Confirmation — {interaction.guild.name}",
@@ -899,8 +910,7 @@ async def bulkmute(interaction: discord.Interaction, users: str, duration: str, 
         )
         return
 
-    user_mentions = [f"<@{uid}>" for uid in user_ids]
-    user_list_str = "\n".join([f"• {u}" for u in user_mentions])
+    user_list_str = format_user_list([f"<@{uid}>" for uid in user_ids])
 
     embed = discord.Embed(
         title=f"Bulk Mute Confirmation — {interaction.guild.name}",
@@ -927,8 +937,7 @@ async def bulkwarn(interaction: discord.Interaction, users: str, reason: str):
         await interaction.response.send_message("No valid user IDs or mentions found.", ephemeral=True)
         return
 
-    user_mentions = [f"<@{uid}>" for uid in user_ids]
-    user_list_str = "\n".join([f"• {u}" for u in user_mentions])
+    user_list_str = format_user_list([f"<@{uid}>" for uid in user_ids])
 
     embed = discord.Embed(
         title=f"Bulk Warn Confirmation — {interaction.guild.name}",
