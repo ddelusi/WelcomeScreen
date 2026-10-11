@@ -617,20 +617,83 @@ async def purge_bot(interaction: discord.Interaction, amount: int):
 
 @bot.tree.command(name="dm", description="Send a direct message to a user through the bot")
 @app_commands.checks.has_permissions(administrator=True)
+@app_commands.describe(
+    user="The user to message",
+    message="The direct message to send (up to 2000 characters)"
+)
+@app_commands.checks.cooldown(1, 3.0, key=lambda interaction: interaction.user.id)
 async def dm_user(interaction: discord.Interaction, user: discord.User, message: str):
-    await interaction.response.defer(ephemeral=True)
+    # This command is intended to be run from a server, not from a bot DM.
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} Use this command in a server.",
+            ephemeral=True
+        )
+        return
+
+    message = message.strip()
+    if not message:
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} Please provide a message to send.",
+            ephemeral=True
+        )
+        return
+
+    if len(message) > 2000:
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} Discord messages must be 2000 characters or fewer.",
+            ephemeral=True
+        )
+        return
+
+    # Defer first so the interaction does not time out while Discord processes the DM.
+    await interaction.response.defer(ephemeral=True, thinking=True)
 
     try:
-        await user.send(message)
-        await interaction.followup.send(f"{SUCCESSFUL_SPIN} Successfully sent DM to {user.mention}.", ephemeral=True)
+        # Fetch a fresh User object before sending. This does not bypass the recipient's
+        # privacy settings; Discord can still reject the DM.
+        recipient = await bot.fetch_user(user.id)
+        await recipient.send(
+            content=message,
+            allowed_mentions=discord.AllowedMentions.none()
+        )
+
+        await interaction.followup.send(
+            f"{SUCCESSFUL_SPIN} DM successfully sent to **{discord.utils.escape_markdown(recipient.name)}** (`{recipient.id}`).",
+            ephemeral=True
+        )
 
     except discord.Forbidden:
         await interaction.followup.send(
-            f"{UNSUCCESSFUL_SPIN} Could not send DM to {user.mention}. They may have DMs disabled or blocked the bot.",
+            f"{UNSUCCESSFUL_SPIN} Discord rejected the DM to {user.mention}. "
+            "The user may have server DMs disabled, may have blocked the bot, "
+            "or may not accept messages from this bot. Discord does not allow "
+            "the bot to bypass these settings; ask the user to enable DMs or "
+            "contact them through an available server channel.",
             ephemeral=True
         )
+
+    except discord.NotFound:
+        await interaction.followup.send(
+            f"{UNSUCCESSFUL_SPIN} Discord could not find that user. Check the selected account and try again.",
+            ephemeral=True
+        )
+
+    except discord.HTTPException as e:
+        print(f"/dm failed for user {user.id}: HTTP {e.status}, Discord code {e.code}: {e}")
+        await interaction.followup.send(
+            f"{UNSUCCESSFUL_SPIN} Discord could not deliver the DM (HTTP {e.status}, error {e.code}). "
+            "Check the bot logs for details and try again.",
+            ephemeral=True
+        )
+
     except Exception as e:
-        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} An error occurred: {e}", ephemeral=True)
+        print(f"Unexpected /dm error for user {user.id}: {type(e).__name__}: {e}")
+        await interaction.followup.send(
+            f"{UNSUCCESSFUL_SPIN} An unexpected error occurred while sending the DM. "
+            "The bot logs contain more details.",
+            ephemeral=True
+        )
 
 
 # --- Helper Duration Parser ---
