@@ -56,6 +56,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 SUCCESSFUL_SPIN = "<a:SuccessfulSpin:1547127487824142346>"
 UNSUCCESSFUL_SPIN = "<a:UnsuccessfulSpin:1547127600693116999>"
 
+# Seconds to wait between users in bulk actions (keeps DMs from looking like spam)
+BULK_DM_DELAY = 2.0
+
 # Server-Specific Storage
 server_configs = {}
 user_damage = {}  # (guild_id, user_id) -> total damage points
@@ -613,89 +616,6 @@ async def purge_bot(interaction: discord.Interaction, amount: int):
     )
 
 
-# --- Direct Message Commands ---
-
-@bot.tree.command(name="dm", description="Send a direct message to a user through the bot")
-@app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(
-    user="The user to message",
-    message="The direct message to send (up to 2000 characters)"
-)
-@app_commands.checks.cooldown(1, 3.0, key=lambda interaction: interaction.user.id)
-async def dm_user(interaction: discord.Interaction, user: discord.User, message: str):
-    if interaction.guild is None:
-        await interaction.response.send_message(
-            f"{UNSUCCESSFUL_SPIN} Use this command in a server.", ephemeral=True
-        )
-        return
-
-    message = message.strip()
-    if not message:
-        await interaction.response.send_message(
-            f"{UNSUCCESSFUL_SPIN} Please provide a message to send.", ephemeral=True
-        )
-        return
-
-    if len(message) > 2000:
-        await interaction.response.send_message(
-            f"{UNSUCCESSFUL_SPIN} Discord messages must be 2000 characters or fewer.", ephemeral=True
-        )
-        return
-
-    if user.bot:
-        await interaction.response.send_message(
-            f"{UNSUCCESSFUL_SPIN} Bots can't receive DMs from other bots.", ephemeral=True
-        )
-        return
-
-    await interaction.response.defer(ephemeral=True, thinking=True)
-
-    # Prefer the Member object from this server, fall back to the User
-    target = interaction.guild.get_member(user.id) or user
-
-    try:
-        dm_channel = await target.create_dm()
-        await dm_channel.send(
-            content=message,
-            allowed_mentions=discord.AllowedMentions.none()
-        )
-        await interaction.followup.send(
-            f"{SUCCESSFUL_SPIN} DM successfully sent to **{discord.utils.escape_markdown(user.name)}** (`{user.id}`).",
-            ephemeral=True
-        )
-
-    except discord.Forbidden as e:
-        print(f"/dm Forbidden for {user.id}: code {e.code}, {e.text}")
-        if e.code == 50007:
-            reason = (
-                "Discord says this user can't be messaged by the bot. Most likely they have "
-                "**\"Allow direct messages from server members\"** turned off for this server, "
-                "have blocked the bot, or share no server with it."
-            )
-        else:
-            reason = f"Discord refused the request (error `{e.code}`): {e.text}"
-        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} {reason}", ephemeral=True)
-
-    except discord.NotFound:
-        await interaction.followup.send(
-            f"{UNSUCCESSFUL_SPIN} Discord could not find that user.", ephemeral=True
-        )
-
-    except discord.HTTPException as e:
-        print(f"/dm HTTPException for {user.id}: HTTP {e.status}, code {e.code}: {e.text}")
-        if e.code == 40003:
-            reason = "The bot is opening DMs too fast. Wait a bit and try again."
-        else:
-            reason = f"Discord could not deliver the DM (HTTP {e.status}, error `{e.code}`)."
-        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} {reason}", ephemeral=True)
-
-    except Exception as e:
-        print(f"Unexpected /dm error for {user.id}: {type(e).__name__}: {e}")
-        await interaction.followup.send(
-            f"{UNSUCCESSFUL_SPIN} An unexpected error occurred. Check the bot logs.", ephemeral=True
-        )
-
-
 # --- Helper Duration Parser ---
 
 def parse_duration(duration_str: str) -> int:
@@ -761,9 +681,13 @@ class BulkConfirmView(discord.ui.View):
         successful, failed = [], []
 
         if self.action_type == "ban":
-            for uid in self.user_ids:
+            for i, uid in enumerate(self.user_ids):
+                if i:
+                    await asyncio.sleep(BULK_DM_DELAY)
                 try:
-                    user_obj = await bot.fetch_user(uid)
+                    user_obj = interaction.guild.get_member(uid)
+                    if user_obj is None:
+                        raise LookupError("Not in server, skip DM")
                     dm_embed = discord.Embed(
                         title=f"🔨 Banned from {interaction.guild.name}",
                         description="You have been bulk banned by a moderator.",
@@ -784,7 +708,9 @@ class BulkConfirmView(discord.ui.View):
                     failed.append(str(uid))
 
         elif self.action_type == "kick":
-            for uid in self.user_ids:
+            for i, uid in enumerate(self.user_ids):
+                if i:
+                    await asyncio.sleep(BULK_DM_DELAY)
                 try:
                     member = await interaction.guild.fetch_member(uid)
                     dm_embed = discord.Embed(
@@ -805,7 +731,9 @@ class BulkConfirmView(discord.ui.View):
         elif self.action_type == "mute":
             seconds = parse_duration(self.duration)
             timeout_delta = timedelta(seconds=seconds)
-            for uid in self.user_ids:
+            for i, uid in enumerate(self.user_ids):
+                if i:
+                    await asyncio.sleep(BULK_DM_DELAY)
                 try:
                     member = await interaction.guild.fetch_member(uid)
                     dm_embed = discord.Embed(
@@ -824,7 +752,9 @@ class BulkConfirmView(discord.ui.View):
                     failed.append(str(uid))
 
         elif self.action_type == "warn":
-            for uid in self.user_ids:
+            for i, uid in enumerate(self.user_ids):
+                if i:
+                    await asyncio.sleep(BULK_DM_DELAY)
                 try:
                     member = await interaction.guild.fetch_member(uid)
                     dm_embed = discord.Embed(
@@ -1741,6 +1671,325 @@ async def cat(interaction: discord.Interaction, type: app_commands.Choice[str] =
 
     except Exception:
         await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} An error occurred while fetching the cat image.")
+
+
+# --- RoleManage-Style Role Automation (IF roles -> THEN give/remove a role) ---
+
+ROLE_RULES_FILE = "role_rules.json"
+MAX_RULES_PER_GUILD = 25
+role_rules = {}  # guild_id -> list of rule dicts
+_role_eval_times = {}  # (guild_id, user_id) -> recent evaluation timestamps (loop guard)
+
+
+def save_role_rules():
+    with open(ROLE_RULES_FILE, "w") as f:
+        json.dump({str(g): rules for g, rules in role_rules.items()}, f, indent=4)
+
+
+def load_role_rules():
+    global role_rules
+    if os.path.exists(ROLE_RULES_FILE):
+        try:
+            with open(ROLE_RULES_FILE, "r") as f:
+                data = json.load(f)
+            role_rules = {int(g): rules for g, rules in data.items()}
+        except Exception as e:
+            print(f"Error loading role rules: {e}")
+
+
+load_role_rules()
+
+
+def parse_role_ids(raw_input: str) -> list[int]:
+    """Pulls role IDs out of @role mentions (<@&id>) or raw numeric IDs, keeping order."""
+    return list(dict.fromkeys(int(x) for x in re.findall(r"\d{15,20}", raw_input or "")))
+
+
+def rule_condition_met(role_ids: set, rule: dict) -> bool:
+    if_roles = rule["if_roles"]
+    if not if_roles:
+        return False
+    if rule["match"] == "any":
+        ok = any(r in role_ids for r in if_roles)
+    else:
+        ok = all(r in role_ids for r in if_roles)
+    if ok and any(r in role_ids for r in rule.get("unless_roles", [])):
+        ok = False
+    return ok
+
+
+def describe_rule(rule: dict) -> str:
+    ifs = ", ".join(f"<@&{r}>" for r in rule["if_roles"])
+    if len(rule["if_roles"]) == 1:
+        cond = f"has {ifs}"
+    else:
+        cond = f"has {'ALL' if rule['match'] == 'all' else 'ANY'} of {ifs}"
+    if rule.get("unless_roles"):
+        unless = ", ".join(f"<@&{r}>" for r in rule["unless_roles"])
+        cond += f" and has none of {unless}"
+
+    if rule["action"] == "give":
+        then = f"**GIVE** <@&{rule['then_role']}>"
+        if rule.get("auto_remove", True):
+            then += " (taken away again if they stop qualifying)"
+    else:
+        then = f"**REMOVE** <@&{rule['then_role']}>"
+    return f"**IF** member {cond}\n**THEN** {then}"
+
+
+async def apply_role_rules(member: discord.Member, reason: str = "RoleManage rule") -> int:
+    """Evaluates every rule for one member and applies any role changes. Returns number of changes."""
+    guild = member.guild
+    rules = role_rules.get(guild.id)
+    if not rules or member.bot:
+        return 0
+
+    current = {r.id for r in member.roles}
+    desired = {}  # role_id -> True (should have) / False (should not have)
+
+    # 1) "give" rules that are no longer met take the role back (if auto_remove is on)
+    for rule in rules:
+        if rule["action"] == "give" and rule.get("auto_remove", True) and not rule_condition_met(current, rule):
+            desired[rule["then_role"]] = False
+    # 2) "give" rules that are met hand the role out (overrides step 1)
+    for rule in rules:
+        if rule["action"] == "give" and rule_condition_met(current, rule):
+            desired[rule["then_role"]] = True
+    # 3) "remove" rules that are met always win
+    for rule in rules:
+        if rule["action"] == "remove" and rule_condition_met(current, rule):
+            desired[rule["then_role"]] = False
+
+    to_add, to_remove = [], []
+    for role_id, want in desired.items():
+        role = guild.get_role(role_id)
+        if role is None or role.managed or role >= guild.me.top_role:
+            continue
+        if want and role_id not in current:
+            to_add.append(role)
+        elif not want and role_id in current:
+            to_remove.append(role)
+
+    if to_add:
+        await member.add_roles(*to_add, reason=reason)
+    if to_remove:
+        await member.remove_roles(*to_remove, reason=reason)
+    return len(to_add) + len(to_remove)
+
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    if after.bot or before.roles == after.roles:
+        return
+    if not role_rules.get(after.guild.id):
+        return
+
+    # Loop guard: stops contradictory rules from flipping a role back and forth forever
+    key = (after.guild.id, after.id)
+    now = time.time()
+    stamps = [t for t in _role_eval_times.get(key, []) if now - t < 30]
+    if len(stamps) >= 10:
+        print(f"RoleManage loop guard tripped for {after.id} in {after.guild.id} - check for conflicting rules.")
+        return
+    stamps.append(now)
+    _role_eval_times[key] = stamps
+
+    try:
+        await apply_role_rules(after)
+    except (discord.Forbidden, discord.HTTPException) as e:
+        print(f"RoleManage failed to update {after.id} in {after.guild.id}: {e}")
+
+
+rolemanage_group = app_commands.Group(
+    name="rolemanage",
+    description="Automatically give or remove roles based on the roles a member already has",
+    guild_only=True,
+    default_permissions=discord.Permissions(manage_roles=True)
+)
+
+
+@rolemanage_group.command(name="add", description="Create a rule: IF members have certain roles THEN give/remove a role")
+@app_commands.checks.has_permissions(manage_roles=True)
+@app_commands.describe(
+    if_roles="Role(s) to check for - @mention them (several allowed) or paste IDs",
+    then_role="The role to give or remove when the condition is met",
+    action="Give or remove the role (default: give)",
+    match="Need ALL of the if-roles or just ANY of them (default: all)",
+    unless_roles="Optional: rule does NOT apply if the member has any of these roles",
+    auto_remove="For 'give' rules: take the role away again if they stop qualifying (default: yes)"
+)
+@app_commands.choices(
+    action=[
+        app_commands.Choice(name="Give the role", value="give"),
+        app_commands.Choice(name="Remove the role", value="remove"),
+    ],
+    match=[
+        app_commands.Choice(name="Must have ALL of the if-roles", value="all"),
+        app_commands.Choice(name="Must have ANY of the if-roles", value="any"),
+    ]
+)
+async def rolemanage_add(interaction: discord.Interaction, if_roles: str, then_role: discord.Role,
+                        action: app_commands.Choice[str] = None, match: app_commands.Choice[str] = None,
+                        unless_roles: str = None, auto_remove: bool = True):
+    guild = interaction.guild
+    action_value = action.value if action else "give"
+    match_value = match.value if match else "all"
+
+    if_ids = parse_role_ids(if_roles)
+    unless_ids = parse_role_ids(unless_roles) if unless_roles else []
+
+    if not if_ids:
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} I couldn't find any roles in `if_roles`. @mention the roles or paste their IDs.",
+            ephemeral=True)
+        return
+
+    unknown = [str(r) for r in if_ids + unless_ids if guild.get_role(r) is None]
+    if unknown:
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} These aren't roles in this server: {', '.join(unknown)}", ephemeral=True)
+        return
+
+    if then_role.is_default() or then_role.managed:
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} That role can't be assigned manually (it's @everyone or managed by an integration).",
+            ephemeral=True)
+        return
+
+    if then_role.id in if_ids or then_role.id in unless_ids:
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} The target role can't also be one of the condition roles.", ephemeral=True)
+        return
+
+    if then_role >= guild.me.top_role:
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} {then_role.mention} is above my highest role, so I can't manage it. "
+            "Move my role higher in Server Settings → Roles.", ephemeral=True)
+        return
+
+    if interaction.user.id != guild.owner_id and then_role >= interaction.user.top_role:
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} You can't create a rule for a role that's at or above your own highest role.",
+            ephemeral=True)
+        return
+
+    rules = role_rules.setdefault(guild.id, [])
+    if len(rules) >= MAX_RULES_PER_GUILD:
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} This server already has the maximum of {MAX_RULES_PER_GUILD} rules.",
+            ephemeral=True)
+        return
+
+    rule = {
+        "id": max((r["id"] for r in rules), default=0) + 1,
+        "if_roles": if_ids,
+        "unless_roles": unless_ids,
+        "match": match_value,
+        "action": action_value,
+        "then_role": then_role.id,
+        "auto_remove": auto_remove
+    }
+    rules.append(rule)
+    save_role_rules()
+
+    embed = discord.Embed(
+        title=f"✅ Rule #{rule['id']} Created",
+        description=describe_rule(rule),
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_footer(text="Applies to role changes from now on. Run /rolemanage sync to apply it to existing members.")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await log_action(
+        guild,
+        "RoleManage Rule Created",
+        f"**Rule #{rule['id']}**\n{describe_rule(rule)}\n**Created by:** {interaction.user.mention}",
+        discord.Color.green()
+    )
+
+
+@rolemanage_group.command(name="list", description="Show all RoleManage rules in this server")
+@app_commands.checks.has_permissions(manage_roles=True)
+async def rolemanage_list(interaction: discord.Interaction):
+    rules = role_rules.get(interaction.guild_id, [])
+    if not rules:
+        await interaction.response.send_message(
+            "No rules yet. Create one with `/rolemanage add`.", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title=f"RoleManage Rules — {interaction.guild.name}",
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    for rule in rules:
+        embed.add_field(name=f"Rule #{rule['id']}", value=describe_rule(rule)[:1024], inline=False)
+    embed.set_footer(text="Use /rolemanage remove <rule_id> to delete a rule.")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@rolemanage_group.command(name="remove", description="Delete a RoleManage rule by its number")
+@app_commands.checks.has_permissions(manage_roles=True)
+@app_commands.describe(rule_id="The rule number shown in /rolemanage list")
+async def rolemanage_remove(interaction: discord.Interaction, rule_id: int):
+    rules = role_rules.get(interaction.guild_id, [])
+    target = next((r for r in rules if r["id"] == rule_id), None)
+    if not target:
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} No rule with number {rule_id}. Check `/rolemanage list`.", ephemeral=True)
+        return
+
+    rules.remove(target)
+    save_role_rules()
+    await interaction.response.send_message(
+        f"{SUCCESSFUL_SPIN} Deleted rule #{rule_id}. Roles it already handed out are left as they are.",
+        ephemeral=True)
+    await log_action(
+        interaction.guild,
+        "RoleManage Rule Deleted",
+        f"**Rule #{rule_id}**\n{describe_rule(target)}\n**Deleted by:** {interaction.user.mention}",
+        discord.Color.red()
+    )
+
+
+@rolemanage_group.command(name="sync", description="Apply all rules to every current member of the server")
+@app_commands.checks.has_permissions(manage_roles=True)
+async def rolemanage_sync(interaction: discord.Interaction):
+    if not role_rules.get(interaction.guild_id):
+        await interaction.response.send_message(
+            "No rules to apply. Create one with `/rolemanage add`.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    changed_members = 0
+    total_changes = 0
+    failed = 0
+    async for member in interaction.guild.fetch_members(limit=None):
+        if member.bot:
+            continue
+        try:
+            n = await apply_role_rules(member, reason=f"RoleManage sync by {interaction.user}")
+            if n:
+                changed_members += 1
+                total_changes += n
+                await asyncio.sleep(0.5)  # stay well under Discord's rate limits
+        except (discord.Forbidden, discord.HTTPException):
+            failed += 1
+
+    msg = f"{SUCCESSFUL_SPIN} Sync complete: **{total_changes}** role change(s) across **{changed_members}** member(s)."
+    if failed:
+        msg += f"\n{UNSUCCESSFUL_SPIN} Couldn't update **{failed}** member(s) (check my role position)."
+    await interaction.followup.send(msg, ephemeral=True)
+    await log_action(
+        interaction.guild,
+        "RoleManage Sync Executed",
+        f"**Role changes:** {total_changes}\n**Members changed:** {changed_members}\n**Run by:** {interaction.user.mention}",
+        discord.Color.blue()
+    )
+
+
+bot.tree.add_command(rolemanage_group)
 
 
 bot.run(TOKEN)
