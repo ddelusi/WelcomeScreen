@@ -50,10 +50,10 @@ DM_LOG_CHANNEL_ID = 1547782664642371685  # Target channel for bot DM logs
 
 intents = discord.Intents.default()
 intents.members = True
-intents.message_content = True  # Required for on_message and on_message_delete
+# Uncomment the line below ONLY if you enable "Message Content Intent" in the Discord Developer Portal (needed for deleted message logs):
+# intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
-bot.synced = False
+bot = commands.Bot(command_prefix=commands.when_mentioned_or("!"), intents=intents)
 
 # Custom Emojis
 SUCCESSFUL_SPIN = "<a:SuccessfulSpin:1547127487824142346>"
@@ -167,14 +167,19 @@ async def send_user_dm(user: discord.User, embed: discord.Embed):
         pass
 
 
+# --- Startup & Manual Sync (Prevents Cloudflare IP Rate-Limits on Render) ---
+
 @bot.event
 async def on_ready():
-    if not bot.synced:
-        await bot.tree.sync()
-        bot.synced = True
-        print(f"Logged in as {bot.user} (ID: {bot.user.id}) - Globally synced commands across all servers")
-    else:
-        print(f"Reconnected as {bot.user} (ID: {bot.user.id})")
+    print(f"Logged in as {bot.user} (ID: {bot.user.id}) - Ready!")
+
+
+@bot.command(name="sync")
+@commands.is_owner()
+async def sync_commands(ctx: commands.Context):
+    """Run by typing '@BotName sync' in a server channel (does not require Message Content Intent)."""
+    await bot.tree.sync()
+    await ctx.send(f"{SUCCESSFUL_SPIN} Globally synced slash commands!")
 
 
 # --- Global Slash Command Error Handler (Prevents "The application did not respond") ---
@@ -692,13 +697,11 @@ class BulkConfirmView(discord.ui.View):
         self.reason = reason
         self.author_id = author_id
 
-        # Red primary action button
         button_label = f"{action_type.capitalize()} All"
         self.confirm_button = discord.ui.Button(label=button_label, style=discord.ButtonStyle.red)
         self.confirm_button.callback = self.confirm_callback
         self.add_item(self.confirm_button)
 
-        # Grey secondary cancel button
         self.cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
         self.cancel_button.callback = self.cancel_callback
         self.add_item(self.cancel_button)
@@ -1176,7 +1179,7 @@ async def unban(interaction: discord.Interaction, user_id: str, reason: str = "N
                                         ephemeral=True)
 
 
-# --- Speak / Say Commands (Fixed with Defer & Full Exception Handling) ---
+# --- Speak / Say Commands ---
 
 @bot.tree.command(name="say", description="Make the bot say a message in a specified channel")
 @app_commands.checks.has_permissions(manage_messages=True)
