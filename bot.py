@@ -6,9 +6,7 @@ import time
 import asyncio
 import random
 import re
-import traceback
 from datetime import datetime, timedelta
-from typing import Optional
 import aiohttp
 import discord
 from discord import app_commands
@@ -20,11 +18,6 @@ import requests
 # --- Keep-Alive Web Server Setup for Render Free Tier ---
 flask_app = Flask('')
 
-# Render tells a web service which port to use through the PORT environment variable
-PORT = int(os.getenv('PORT', '8080'))
-# Render also provides the service's public URL automatically (falls back to your old hard-coded one)
-SELF_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://welcomescreen-4ulq.onrender.com')
-
 
 @flask_app.route('/')
 def home():
@@ -32,19 +25,17 @@ def home():
 
 
 def run_flask():
-    flask_app.run(host='0.0.0.0', port=PORT)
+    flask_app.run(host='0.0.0.0', port=8080)
 
 
 def keep_alive_ping():
     time.sleep(20)
     while True:
         try:
-            # timeout is important: without it one stuck request freezes this loop forever
-            # and Render puts the bot to sleep after 15 minutes without traffic
-            requests.get(SELF_URL, timeout=15)
+            requests.get("https://welcomescreen-4ulq.onrender.com")
         except Exception:
             pass
-        time.sleep(300)  # Pings every 5 minutes
+        time.sleep(600)  # Pings every 10 minutes
 
 
 # Run web server in background threads
@@ -59,20 +50,7 @@ DM_LOG_CHANNEL_ID = 1547782664642371685  # Target channel for bot DM logs
 intents = discord.Intents.default()
 intents.members = True
 
-
-class ModBot(commands.Bot):
-    async def setup_hook(self):
-        # Runs exactly once per start (on_ready can fire many times on reconnects,
-        # and syncing over and over can get rate limited)
-        try:
-            synced = await self.tree.sync()
-            print(f"Synced {len(synced)} command(s) globally")
-        except Exception as e:
-            print(f"Command sync FAILED: {e}")
-            traceback.print_exc()
-
-
-bot = ModBot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Custom Emojis
 SUCCESSFUL_SPIN = "<a:SuccessfulSpin:1547127487824142346>"
@@ -167,78 +145,26 @@ def get_server_config(guild_id: int) -> dict:
 
 
 async def log_action(guild: discord.Guild, title: str, description: str, color: discord.Color):
-    """Posts to the log channel. A broken log channel must never break the command that called this."""
-    try:
-        config = get_server_config(guild.id)
-        log_chan_id = config.get("log_channel")
-        if log_chan_id:
-            channel = guild.get_channel(log_chan_id)
-            if channel:
-                embed = discord.Embed(title=title, description=description[:4000], color=color,
-                                      timestamp=discord.utils.utcnow())
-                await channel.send(embed=embed)
-    except discord.HTTPException as e:
-        print(f"log_action failed in guild {guild.id}: {e}")
+    config = get_server_config(guild.id)
+    log_chan_id = config.get("log_channel")
+    if log_chan_id:
+        channel = guild.get_channel(log_chan_id)
+        if channel:
+            embed = discord.Embed(title=title, description=description, color=color, timestamp=discord.utils.utcnow())
+            await channel.send(embed=embed)
 
 
 async def send_user_dm(user: discord.User, embed: discord.Embed):
-    """Tries to DM a user. Catches ALL Discord errors, not just Forbidden - e.g. Discord's
-    'opening DMs too fast' error is a different error type and used to crash whole commands."""
     try:
         await user.send(embed=embed)
-    except discord.HTTPException:
+    except discord.Forbidden:
         pass
-
-
-async def fail(interaction: discord.Interaction, text: str):
-    """Shows an error to the person who ran the command, whether or not the command already deferred.
-    (If the command deferred publicly, Discord shows this message publicly too.)"""
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(text, ephemeral=True)
-        else:
-            await interaction.response.send_message(text, ephemeral=True)
-    except discord.HTTPException as e:
-        print(f"Could not send error message: {e}")
-
-
-def hierarchy_problem(guild: discord.Guild, member: discord.Member) -> Optional[str]:
-    """Plain-English reason the bot can't moderate this member, or None if it looks fine."""
-    if member.id == guild.owner_id:
-        return "I can't do that to the server owner."
-    if member.top_role >= guild.me.top_role:
-        return "That member's highest role is at or above mine. Move my role higher in Server Settings → Roles."
-    return None
 
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} (ID: {bot.user.id}) - {len(bot.guilds)} server(s)")
-
-
-# --- Global Error Handler: no more silent "The application did not respond" ---
-
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    original = getattr(error, "original", error)
-    cmd_name = interaction.command.qualified_name if interaction.command else "unknown"
-
-    if isinstance(error, app_commands.MissingPermissions):
-        msg = f"{UNSUCCESSFUL_SPIN} You don't have permission to use this command."
-    elif isinstance(error, app_commands.NoPrivateMessage):
-        msg = f"{UNSUCCESSFUL_SPIN} This command only works inside a server."
-    elif isinstance(error, app_commands.CommandOnCooldown):
-        msg = f"{UNSUCCESSFUL_SPIN} Slow down! Try again in {error.retry_after:.0f}s."
-    elif isinstance(original, discord.Forbidden):
-        print(f"[/{cmd_name}] Forbidden: {original}")
-        msg = (f"{UNSUCCESSFUL_SPIN} I don't have permission to do that. "
-               "Check my permissions in this channel and that my role is above the target's role.")
-    else:
-        print(f"[/{cmd_name}] unexpected error:")
-        traceback.print_exception(type(error), error, error.__traceback__)
-        msg = f"{UNSUCCESSFUL_SPIN} Something went wrong: `{type(original).__name__}: {original}`"[:1900]
-
-    await fail(interaction, msg)
+    await bot.tree.sync()
+    print(f"Logged in as {bot.user} (ID: {bot.user.id}) - Globally synced commands across all servers")
 
 
 # --- Helper Function for Automated Damage & Punishment Thresholds ---
@@ -355,22 +281,6 @@ def create_damage_embed(action_type: str, member: discord.Member, points: int, c
 
 # --- Reaction & Reply Commands ---
 
-async def fetch_target_message(interaction: discord.Interaction, raw: str) -> Optional[discord.Message]:
-    """Accepts a message ID or a message link (links to other channels work too).
-    Returns None if no ID can be found in the text."""
-    nums = re.findall(r"\d{15,25}", raw or "")
-    if not nums:
-        return None
-    message_id = int(nums[-1])
-    channel = interaction.channel
-    # A link looks like .../channels/<guild>/<channel>/<message>
-    if "/" in raw and len(nums) >= 2 and interaction.guild:
-        linked = interaction.guild.get_channel_or_thread(int(nums[-2]))
-        if linked is not None:
-            channel = linked
-    return await channel.fetch_message(message_id)
-
-
 @bot.tree.context_menu(name="React as Bot")
 async def react_as_bot(interaction: discord.Interaction, message: discord.Message):
     class ReactModal(discord.ui.Modal, title="Add Reaction"):
@@ -400,15 +310,21 @@ async def react_as_bot(interaction: discord.Interaction, message: discord.Messag
 async def react_slash(interaction: discord.Interaction, message_input: str, emoji: str):
     await interaction.response.defer(ephemeral=True)
 
-    try:
-        target_message = await fetch_target_message(interaction, message_input)
-        if target_message is None:
+    if "/" in message_input:
+        message_id = int(message_input.split("/")[-1])
+    else:
+        try:
+            message_id = int(message_input)
+        except ValueError:
             await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Invalid Message ID or Link provided.", ephemeral=True)
             return
+
+    try:
+        target_message = await interaction.channel.fetch_message(message_id)
         await target_message.add_reaction(emoji.strip())
         await interaction.followup.send(f"{SUCCESSFUL_SPIN} Added reaction {emoji} to message!", ephemeral=True)
     except discord.NotFound:
-        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Could not find a message with that ID in that channel.",
+        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Could not find a message with that ID in this channel.",
                                         ephemeral=True)
     except discord.HTTPException:
         await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Invalid emoji or lack permissions to react.",
@@ -447,15 +363,21 @@ async def reply_as_bot(interaction: discord.Interaction, message: discord.Messag
 async def reply_slash(interaction: discord.Interaction, message_input: str, response: str):
     await interaction.response.defer(ephemeral=True)
 
-    try:
-        target_message = await fetch_target_message(interaction, message_input)
-        if target_message is None:
+    if "/" in message_input:
+        message_id = int(message_input.split("/")[-1])
+    else:
+        try:
+            message_id = int(message_input)
+        except ValueError:
             await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Invalid Message ID or Link provided.", ephemeral=True)
             return
+
+    try:
+        target_message = await interaction.channel.fetch_message(message_id)
         await target_message.reply(response)
         await interaction.followup.send(f"{SUCCESSFUL_SPIN} Reply sent successfully!", ephemeral=True)
     except discord.NotFound:
-        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Could not find a message with that ID in that channel.",
+        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Could not find a message with that ID in this channel.",
                                         ephemeral=True)
     except discord.Forbidden:
         await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} I don't have permission to reply in this channel.",
@@ -481,7 +403,7 @@ async def on_message(message: discord.Message):
             )
             try:
                 await message.author.send(embed=notice_embed)
-            except discord.HTTPException:
+            except discord.Forbidden:
                 pass
 
         log_channel = bot.get_channel(DM_LOG_CHANNEL_ID)
@@ -499,12 +421,9 @@ async def on_message(message: discord.Message):
 
             if message.attachments:
                 attachment_urls = "\n".join([att.url for att in message.attachments])
-                embed.add_field(name="Attachments", value=attachment_urls[:1024], inline=False)
+                embed.add_field(name="Attachments", value=attachment_urls, inline=False)
 
-            try:
-                await log_channel.send(embed=embed)
-            except discord.HTTPException as e:
-                print(f"Could not log DM: {e}")
+            await log_channel.send(embed=embed)
 
 
 @bot.event
@@ -534,14 +453,11 @@ async def on_message_delete(message: discord.Message):
         if log_chan:
             embed = discord.Embed(
                 title="Message Deleted",
-                description=f"**Author:** {message.author.mention}\n**Channel:** {message.channel.mention}\n\n**Content:**\n{message.content}"[:4000],
+                description=f"**Author:** {message.author.mention}\n**Channel:** {message.channel.mention}\n\n**Content:**\n{message.content}",
                 color=discord.Color.red(),
                 timestamp=discord.utils.utcnow()
             )
-            try:
-                await log_chan.send(embed=embed)
-            except discord.HTTPException as e:
-                print(f"Could not log deleted message: {e}")
+            await log_chan.send(embed=embed)
 
     if config["media_log_channel"]:
         media_chan = message.guild.get_channel(config["media_log_channel"])
@@ -570,14 +486,11 @@ async def on_message_delete(message: discord.Message):
             elif has_gif_link:
                 embed = discord.Embed(
                     title="Media Link Deleted",
-                    description=f"**Author:** {message.author.mention}\n**Channel:** {message.channel.mention}\n\n**Content/URL:**\n{message.content}"[:4000],
+                    description=f"**Author:** {message.author.mention}\n**Channel:** {message.channel.mention}\n\n**Content/URL:**\n{message.content}",
                     color=discord.Color.gold(),
                     timestamp=discord.utils.utcnow()
                 )
-                try:
-                    await media_chan.send(embed=embed)
-                except discord.HTTPException as e:
-                    print(f"Could not log deleted media link: {e}")
+                await media_chan.send(embed=embed)
 
 
 # --- Info Commands ---
@@ -586,10 +499,7 @@ async def on_message_delete(message: discord.Message):
 async def userinfo(interaction: discord.Interaction, member: discord.Member = None):
     target = member or interaction.user
     roles = [role.mention for role in reversed(target.roles) if role != interaction.guild.default_role]
-    # format_user_list keeps this under Discord's 1024-character field limit
-    # (members with lots of roles used to make this command crash)
-    roles_str = format_user_list(roles, sep=", ", prefix="")
-    joined = f"<t:{int(target.joined_at.timestamp())}:R>" if target.joined_at else "Unknown"
+    roles_str = ", ".join(roles) if roles else "None"
 
     embed = discord.Embed(
         title=f"User Info — {target.display_name}",
@@ -600,7 +510,7 @@ async def userinfo(interaction: discord.Interaction, member: discord.Member = No
     embed.add_field(name="Username", value=f"`{target.name}`", inline=True)
     embed.add_field(name="User ID", value=f"`{target.id}`", inline=True)
     embed.add_field(name="Account Created", value=f"<t:{int(target.created_at.timestamp())}:R>", inline=False)
-    embed.add_field(name="Joined Server", value=joined, inline=False)
+    embed.add_field(name="Joined Server", value=f"<t:{int(target.joined_at.timestamp())}:R>", inline=False)
     embed.add_field(name=f"Roles ({len(roles)})", value=roles_str, inline=False)
 
     await interaction.response.send_message(embed=embed)
@@ -623,8 +533,7 @@ async def serverinfo(interaction: discord.Interaction):
     if guild.icon:
         embed.set_thumbnail(url=guild.icon.url)
 
-    # guild.owner can be None if the owner isn't cached, so use the ID instead
-    embed.add_field(name="Owner", value=f"<@{guild.owner_id}> (`{guild.owner_id}`)", inline=False)
+    embed.add_field(name="Owner", value=f"{guild.owner.mention} (`{guild.owner.id}`)", inline=False)
     embed.add_field(name="Server ID", value=f"`{guild.id}`", inline=True)
     embed.add_field(name="Created On", value=f"<t:{int(guild.created_at.timestamp())}:R>", inline=True)
     embed.add_field(
@@ -1040,8 +949,6 @@ async def bulkwarn(interaction: discord.Interaction, users: str, reason: str):
 
 
 # --- Manual Moderation Commands ---
-# Pattern used below: do the quick checks first, then defer() so Discord gets an answer
-# within its 3-second limit, THEN do the slow work (DMs, timeouts, bans, logging).
 
 @bot.tree.command(name="mute", description="Mute (timeout) a member manually")
 @app_commands.checks.has_permissions(moderate_members=True)
@@ -1066,19 +973,7 @@ async def mute(interaction: discord.Interaction, member: discord.Member, duratio
         )
         return
 
-    problem = hierarchy_problem(interaction.guild, member)
-    if problem:
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} {problem}", ephemeral=True)
-        return
-
-    await interaction.response.defer()
     delta = timedelta(seconds=seconds)
-
-    try:
-        await member.timeout(delta, reason=reason)
-    except discord.Forbidden:
-        await fail(interaction, f"{UNSUCCESSFUL_SPIN} I lack permission to mute this member.")
-        return
 
     dm_embed = discord.Embed(
         title=f"🔇 Muted in {interaction.guild.name}",
@@ -1090,23 +985,28 @@ async def mute(interaction: discord.Interaction, member: discord.Member, duratio
     dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
     await send_user_dm(member, dm_embed)
 
-    embed = discord.Embed(
-        title="🔇 Member Muted",
-        description=f"{SUCCESSFUL_SPIN} Muted {member.mention} for **{duration}**.",
-        color=discord.Color.gold(),
-        timestamp=discord.utils.utcnow()
-    )
-    embed.add_field(name="Reason", value=reason, inline=False)
-    embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
-                     icon_url=interaction.user.display_avatar.url)
-    await interaction.followup.send(embed=embed)
-    await log_action(
-        interaction.guild,
-        "Manual Mute Executed",
-        f"**Selected User:** {member.mention}\n**Duration:** {duration}\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
-        discord.Color.gold()
-    )
+    try:
+        await member.timeout(delta, reason=reason)
+        embed = discord.Embed(
+            title="🔇 Member Muted",
+            description=f"{SUCCESSFUL_SPIN} Muted {member.mention} for **{duration}**.",
+            color=discord.Color.gold(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
+                         icon_url=interaction.user.display_avatar.url)
+        await interaction.response.send_message(embed=embed)
+        await log_action(
+            interaction.guild,
+            "Manual Mute Executed",
+            f"**Selected User:** {member.mention}\n**Duration:** {duration}\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
+            discord.Color.gold()
+        )
+    except discord.Forbidden:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I lack permission to mute this member.",
+                                                ephemeral=True)
 
 
 @bot.tree.command(name="unmute", description="Unmute (remove timeout) a member manually")
@@ -1114,14 +1014,6 @@ async def mute(interaction: discord.Interaction, member: discord.Member, duratio
 async def unmute(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
     if member.bot:
         await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot unmute bots.", ephemeral=True)
-        return
-
-    await interaction.response.defer()
-
-    try:
-        await member.timeout(None, reason=reason)
-    except discord.Forbidden:
-        await fail(interaction, f"{UNSUCCESSFUL_SPIN} I lack permission to unmute this member.")
         return
 
     dm_embed = discord.Embed(
@@ -1134,20 +1026,25 @@ async def unmute(interaction: discord.Interaction, member: discord.Member, reaso
     dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
     await send_user_dm(member, dm_embed)
 
-    embed = discord.Embed(
-        title="🔊 Member Unmuted",
-        description=f"{SUCCESSFUL_SPIN} Removed timeout for {member.mention}.",
-        color=discord.Color.green(),
-        timestamp=discord.utils.utcnow()
-    )
-    embed.add_field(name="Reason", value=reason, inline=False)
-    embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
-                     icon_url=interaction.user.display_avatar.url)
-    await interaction.followup.send(embed=embed)
-    await log_action(interaction.guild, "Manual Unmute Executed",
-                     f"**Selected User:** {member.mention}\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
-                     discord.Color.green())
+    try:
+        await member.timeout(None, reason=reason)
+        embed = discord.Embed(
+            title="🔊 Member Unmuted",
+            description=f"{SUCCESSFUL_SPIN} Removed timeout for {member.mention}.",
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
+                         icon_url=interaction.user.display_avatar.url)
+        await interaction.response.send_message(embed=embed)
+        await log_action(interaction.guild, "Manual Unmute Executed",
+                         f"**Selected User:** {member.mention}\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
+                         discord.Color.green())
+    except discord.Forbidden:
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I lack permission to unmute this member.",
+                                                ephemeral=True)
 
 
 @bot.tree.command(name="ban", description="Ban a user manually")
@@ -1157,14 +1054,6 @@ async def ban(interaction: discord.Interaction, member: discord.Member, reason: 
         await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot ban bots.", ephemeral=True)
         return
 
-    problem = hierarchy_problem(interaction.guild, member)
-    if problem:
-        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} {problem}", ephemeral=True)
-        return
-
-    await interaction.response.defer()
-
-    # The DM has to go out BEFORE the ban (once banned, the bot can no longer reach them)
     dm_embed = discord.Embed(
         title=f"🔨 Banned from {interaction.guild.name}",
         description="You have been manually banned by a moderator.",
@@ -1177,24 +1066,23 @@ async def ban(interaction: discord.Interaction, member: discord.Member, reason: 
 
     try:
         await member.ban(reason=reason)
+        embed = discord.Embed(
+            title="🔨 Member Banned",
+            description=f"{SUCCESSFUL_SPIN} Banned {member.mention}.",
+            color=discord.Color.red(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
+                         icon_url=interaction.user.display_avatar.url)
+        await interaction.response.send_message(embed=embed)
+        await log_action(interaction.guild, "Manual Ban Executed",
+                         f"**Selected User:** {member.mention} ({member.id})\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
+                         discord.Color.red())
     except discord.Forbidden:
-        await fail(interaction, f"{UNSUCCESSFUL_SPIN} I lack permission to ban this member.")
-        return
-
-    embed = discord.Embed(
-        title="🔨 Member Banned",
-        description=f"{SUCCESSFUL_SPIN} Banned {member.mention}.",
-        color=discord.Color.red(),
-        timestamp=discord.utils.utcnow()
-    )
-    embed.add_field(name="Reason", value=reason, inline=False)
-    embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
-                     icon_url=interaction.user.display_avatar.url)
-    await interaction.followup.send(embed=embed)
-    await log_action(interaction.guild, "Manual Ban Executed",
-                     f"**Selected User:** {member.mention} ({member.id})\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
-                     discord.Color.red())
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I lack permission to ban this member.",
+                                                ephemeral=True)
 
 
 @bot.tree.command(name="unban", description="Unban a user manually by ID")
@@ -1205,42 +1093,40 @@ async def unban(interaction: discord.Interaction, user_id: str, reason: str = "N
                                                 ephemeral=True)
         return
 
-    await interaction.response.defer()
-
     uid = int(user_id)
     try:
         user = await bot.fetch_user(uid)
         await interaction.guild.unban(user, reason=reason)
+
+        dm_embed = discord.Embed(
+            title=f"🔓 Unbanned from {interaction.guild.name}",
+            description="Your ban has been removed.",
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        dm_embed.add_field(name="Reason", value=reason, inline=False)
+        dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
+        await send_user_dm(user, dm_embed)
+
+        embed = discord.Embed(
+            title="🔓 Member Unbanned",
+            description=f"{SUCCESSFUL_SPIN} Unbanned **{user.name}** (`{user.id}`).",
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
+                         icon_url=interaction.user.display_avatar.url)
+        await interaction.response.send_message(embed=embed)
+        await log_action(interaction.guild, "Manual Unban Executed",
+                         f"**Selected User:** {user.mention} ({user.id})\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
+                         discord.Color.green())
     except discord.NotFound:
-        await fail(interaction, f"{UNSUCCESSFUL_SPIN} User ID not found or not currently banned.")
-        return
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} User ID not found or not currently banned.",
+                                                ephemeral=True)
     except discord.Forbidden:
-        await fail(interaction, f"{UNSUCCESSFUL_SPIN} I lack permission to unban users.")
-        return
-
-    dm_embed = discord.Embed(
-        title=f"🔓 Unbanned from {interaction.guild.name}",
-        description="Your ban has been removed.",
-        color=discord.Color.green(),
-        timestamp=discord.utils.utcnow()
-    )
-    dm_embed.add_field(name="Reason", value=reason, inline=False)
-    dm_embed.set_footer(text=f"Moderator: {interaction.user.display_name}")
-    await send_user_dm(user, dm_embed)
-
-    embed = discord.Embed(
-        title="🔓 Member Unbanned",
-        description=f"{SUCCESSFUL_SPIN} Unbanned **{user.name}** (`{user.id}`).",
-        color=discord.Color.green(),
-        timestamp=discord.utils.utcnow()
-    )
-    embed.add_field(name="Reason", value=reason, inline=False)
-    embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
-                     icon_url=interaction.user.display_avatar.url)
-    await interaction.followup.send(embed=embed)
-    await log_action(interaction.guild, "Manual Unban Executed",
-                     f"**Selected User:** {user.mention} ({user.id})\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
-                     discord.Color.green())
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I lack permission to unban users.",
+                                                ephemeral=True)
 
 
 # --- Speak / Say Commands ---
@@ -1248,29 +1134,26 @@ async def unban(interaction: discord.Interaction, user_id: str, reason: str = "N
 @bot.tree.command(name="say", description="Make the bot say a message in a specified channel")
 @app_commands.checks.has_permissions(manage_messages=True)
 async def say(interaction: discord.Interaction, message: str, channel: discord.TextChannel = None):
-    # Acknowledge FIRST. Previously the bot sent the message before replying, so if Discord
-    # was slow the 3-second window expired and you saw "The application did not respond".
-    await interaction.response.defer(ephemeral=True)
     target_channel = channel or interaction.channel
     try:
         await target_channel.send(message)
-        await interaction.followup.send(f"{SUCCESSFUL_SPIN} Message sent to <#{target_channel.id}>!", ephemeral=True)
+        await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Message sent to {target_channel.mention}!",
+                                                ephemeral=True)
     except discord.Forbidden:
-        await interaction.followup.send(
-            f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages in <#{target_channel.id}>.",
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages in {target_channel.mention}.",
             ephemeral=True)
 
 
 @bot.tree.command(name="speak", description="Make the bot say a message in the current channel")
 @app_commands.checks.has_permissions(manage_messages=True)
 async def speak(interaction: discord.Interaction, message: str):
-    await interaction.response.defer(ephemeral=True)
     try:
         await interaction.channel.send(message)
-        await interaction.followup.send(f"{SUCCESSFUL_SPIN} Message sent!", ephemeral=True)
+        await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Message sent!", ephemeral=True)
     except discord.Forbidden:
-        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages here.",
-                                        ephemeral=True)
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages here.",
+                                                ephemeral=True)
 
 
 # --- Advanced Custom Embed Builder & Presets (Fully Restored Options) ---
@@ -1393,7 +1276,7 @@ class AdvancedEmbedModal(discord.ui.Modal, title="Advanced Embed Builder"):
 
             await target_channel.send(embed=embed)
             await interaction.followup.send(
-                f"{SUCCESSFUL_SPIN} Custom embed successfully sent to <#{target_channel.id}>!",
+                f"{SUCCESSFUL_SPIN} Custom embed successfully sent to {target_channel.mention}!",
                 ephemeral=True
             )
         except discord.Forbidden:
@@ -1434,13 +1317,16 @@ class GiveawayButton(discord.ui.View):
             self.entries.add(interaction.user.id)
             await interaction.response.send_message("You entered the giveaway!", ephemeral=True)
 
-            dm_embed = discord.Embed(
-                title="🎉 Giveaway Entry Confirmed!",
-                description=f"You have successfully entered the giveaway for **{prize_name}** in **{interaction.guild.name}**!",
-                color=discord.Color.green(),
-                timestamp=discord.utils.utcnow()
-            )
-            await send_user_dm(interaction.user, dm_embed)
+            try:
+                dm_embed = discord.Embed(
+                    title="🎉 Giveaway Entry Confirmed!",
+                    description=f"You have successfully entered the giveaway for **{prize_name}** in **{interaction.guild.name}**!",
+                    color=discord.Color.green(),
+                    timestamp=discord.utils.utcnow()
+                )
+                await send_user_dm(interaction.user, dm_embed)
+            except discord.Forbidden:
+                pass
 
 
 class GiveawayModal(discord.ui.Modal, title="Create a Giveaway"):
@@ -1590,15 +1476,12 @@ async def damage(interaction: discord.Interaction, member: discord.Member, point
                                                 ephemeral=True)
         return
 
-    # Applying damage can involve a DM, a timeout/ban and a log post - far too slow to do before replying
-    await interaction.response.defer()
-
     pts_to_add = abs(points)
     current_damage, punishment = await apply_damage_and_punish(interaction.guild, member, pts_to_add, reason,
                                                                interaction.user)
 
     embed = create_damage_embed("add", member, pts_to_add, current_damage, punishment, reason, interaction.user)
-    await interaction.followup.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
 
 # --- Remove Damage Commands ---
@@ -1612,14 +1495,12 @@ async def removedamage(interaction: discord.Interaction, member: discord.Member,
                                                 ephemeral=True)
         return
 
-    await interaction.response.defer()
-
     pts_to_remove = -abs(points)
     current_damage, punishment = await apply_damage_and_punish(interaction.guild, member, pts_to_remove, reason,
                                                                interaction.user)
 
     embed = create_damage_embed("remove", member, abs(points), current_damage, punishment, reason, interaction.user)
-    await interaction.followup.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
 
 # --- Damage Query & Warning Commands ---
@@ -1640,8 +1521,6 @@ async def warn(interaction: discord.Interaction, member: discord.Member, reason:
     if member.bot:
         await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot warn bots.", ephemeral=True)
         return
-
-    await interaction.response.defer()
 
     key = (interaction.guild_id, member.id)
     if key not in user_warnings:
@@ -1670,7 +1549,7 @@ async def warn(interaction: discord.Interaction, member: discord.Member, reason:
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.set_footer(text=f"Moderator: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
 
-    await interaction.followup.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
     await log_action(
         interaction.guild,
         "User Warned",
@@ -1692,14 +1571,9 @@ async def warnings(interaction: discord.Interaction, member: discord.Member):
 
     embed = discord.Embed(title=f"Warnings for {member.display_name}",
                           description=f"**Current Damage:** `{total_points}/25`", color=discord.Color.blue())
-    # Discord allows max 25 fields per embed and 1024 characters per field, so show the latest 20
-    # and trim long reasons (too many warnings used to make this command crash)
-    start = max(0, len(warns) - 20)
-    for idx, w in enumerate(warns[start:], start + 1):
+    for idx, w in enumerate(warns, 1):
         embed.add_field(name=f"Warning #{idx}",
-                        value=f"**Reason:** {w['reason'][:800]}\n**Moderator:** {w['by']}", inline=False)
-    if start:
-        embed.set_footer(text=f"Showing the latest 20 of {len(warns)} warnings")
+                        value=f"**Reason:** {w['reason']}\n**Moderator:** {w['by']}", inline=False)
 
     await interaction.response.send_message(embed=embed)
 
@@ -1707,8 +1581,6 @@ async def warnings(interaction: discord.Interaction, member: discord.Member):
 @bot.tree.command(name="clearwarnings", description="Reset warnings and damage points for a user")
 @app_commands.checks.has_permissions(administrator=True)
 async def clearwarnings(interaction: discord.Interaction, member: discord.Member):
-    await interaction.response.defer()
-
     key = (interaction.guild_id, member.id)
     user_damage.pop(key, None)
     user_warnings.pop(key, None)
@@ -1729,7 +1601,7 @@ async def clearwarnings(interaction: discord.Interaction, member: discord.Member
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.set_footer(text=f"Cleared by: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
 
-    await interaction.followup.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
     await log_action(interaction.guild, "Warnings Cleared",
                      f"**Selected User:** {member.mention}\n**Cleared By:** {interaction.user.mention}",
                      discord.Color.green())
@@ -1739,17 +1611,12 @@ async def clearwarnings(interaction: discord.Interaction, member: discord.Member
 @app_commands.checks.has_permissions(manage_emojis=True)
 async def addemote(interaction: discord.Interaction, name: str, url: str):
     await interaction.response.defer()
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status != 200:
-                    await interaction.followup.send(
-                        f"{UNSUCCESSFUL_SPIN} Failed to download image from the provided URL.")
-                    return
-                image_data = await resp.read()
-    except Exception:
-        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Couldn't download that URL. Is it a direct image link?")
-        return
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Failed to download image from the provided URL.")
+                return
+            image_data = await resp.read()
 
     try:
         new_emoji = await interaction.guild.create_custom_emoji(name=name, image=image_data)
@@ -1779,7 +1646,7 @@ async def cat(interaction: discord.Interaction, type: app_commands.Choice[str] =
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=5)) as response:
+            async with session.get(url, params=params, timeout=5) as response:
                 if response.status != 200:
                     await interaction.followup.send(
                         f"{UNSUCCESSFUL_SPIN} Failed to fetch a cat image from the API. Try again later!")
@@ -2259,8 +2126,5 @@ async def banner(interaction: discord.Interaction, user: discord.User = None):
     else:
         await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} **{name}** doesn't have a banner.")
 
-
-if not TOKEN:
-    raise SystemExit("DISCORD_TOKEN is missing - add it under Environment in your Render dashboard.")
 
 bot.run(TOKEN)
