@@ -33,7 +33,7 @@ def keep_alive_ping():
     time.sleep(20)
     while True:
         try:
-            requests.get("https://welcomescreen-4ulq.onrender.com", timeout=10)
+            requests.get("https://jonathanbot-groa.onrender.com", timeout=10)
         except Exception:
             pass
         time.sleep(600)  # Pings every 10 minutes
@@ -991,7 +991,7 @@ async def bulkwarn(interaction: discord.Interaction, users: str, reason: str):
     embed.add_field(name="Reason", value=f"` {reason} `", inline=False)
     embed.set_footer(text="Ensure bot role is positioned higher than target members.")
 
-    view = BulkConfirmView("Warn", user_ids, reason=reason, author_id=interaction.user.id)
+    view =BulkConfirmView("Warn", user_ids, reason=reason, author_id=interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
