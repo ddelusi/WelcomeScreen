@@ -25,15 +25,14 @@ def home():
 
 
 def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    flask_app.run(host='0.0.0.0', port=port)
+    flask_app.run(host='0.0.0.0', port=8080)
 
 
 def keep_alive_ping():
     time.sleep(20)
     while True:
         try:
-            requests.get("https://jonathanbot-groa.onrender.com", timeout=10)
+            requests.get("https://welcomescreen-4ulq.onrender.com")
         except Exception:
             pass
         time.sleep(600)  # Pings every 10 minutes
@@ -50,10 +49,8 @@ DM_LOG_CHANNEL_ID = 1547782664642371685  # Target channel for bot DM logs
 
 intents = discord.Intents.default()
 intents.members = True
-# Uncomment the line below ONLY if you enable "Message Content Intent" in the Discord Developer Portal (needed for deleted message logs):
-# intents.message_content = True
 
-bot = commands.Bot(command_prefix=commands.when_mentioned_or("!"), intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Custom Emojis
 SUCCESSFUL_SPIN = "<a:SuccessfulSpin:1547127487824142346>"
@@ -154,57 +151,20 @@ async def log_action(guild: discord.Guild, title: str, description: str, color: 
         channel = guild.get_channel(log_chan_id)
         if channel:
             embed = discord.Embed(title=title, description=description, color=color, timestamp=discord.utils.utcnow())
-            try:
-                await channel.send(embed=embed)
-            except discord.HTTPException:
-                pass
+            await channel.send(embed=embed)
 
 
 async def send_user_dm(user: discord.User, embed: discord.Embed):
     try:
         await user.send(embed=embed)
-    except (discord.Forbidden, discord.HTTPException):
+    except discord.Forbidden:
         pass
 
-
-# --- Startup & Manual Sync (Prevents Cloudflare IP Rate-Limits on Render) ---
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} (ID: {bot.user.id}) - Ready!")
-
-
-@bot.command(name="sync")
-@commands.is_owner()
-async def sync_commands(ctx: commands.Context):
-    """Run by typing '@BotName sync' in a server channel (does not require Message Content Intent)."""
     await bot.tree.sync()
-    await ctx.send(f"{SUCCESSFUL_SPIN} Globally synced slash commands!")
-
-
-# --- Global Slash Command Error Handler (Prevents "The application did not respond") ---
-
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.MissingPermissions):
-        missing = ", ".join(error.missing_permissions)
-        msg = f"{UNSUCCESSFUL_SPIN} You don't have permission to use this command (Missing: `{missing}`)."
-    elif isinstance(error, app_commands.BotMissingPermissions):
-        missing = ", ".join(error.missing_permissions)
-        msg = f"{UNSUCCESSFUL_SPIN} I am missing permissions required to run this command: `{missing}`."
-    elif isinstance(error, app_commands.NoPrivateMessage):
-        msg = f"{UNSUCCESSFUL_SPIN} This command can only be used inside a server."
-    else:
-        msg = f"{UNSUCCESSFUL_SPIN} An error occurred while running this command: `{error}`"
-        print(f"Command error in /{interaction.command.name if interaction.command else 'unknown'}: {error}")
-
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(msg, ephemeral=True)
-        else:
-            await interaction.response.send_message(msg, ephemeral=True)
-    except discord.HTTPException:
-        pass
+    print(f"Logged in as {bot.user} (ID: {bot.user.id}) - Globally synced commands across all servers")
 
 
 # --- Helper Function for Automated Damage & Punishment Thresholds ---
@@ -331,12 +291,11 @@ async def react_as_bot(interaction: discord.Interaction, message: discord.Messag
         )
 
         async def on_submit(self, modal_interaction: discord.Interaction):
-            await modal_interaction.response.defer(ephemeral=True)
             try:
                 await message.add_reaction(self.emoji_input.value.strip())
-                await modal_interaction.followup.send(f"{SUCCESSFUL_SPIN} Reaction added!", ephemeral=True)
+                await modal_interaction.response.send_message(f"{SUCCESSFUL_SPIN} Reaction added!", ephemeral=True)
             except discord.HTTPException:
-                await modal_interaction.followup.send(
+                await modal_interaction.response.send_message(
                     f"{UNSUCCESSFUL_SPIN} Invalid emoji or missing permissions.", ephemeral=True)
 
     await interaction.response.send_modal(ReactModal())
@@ -352,11 +311,7 @@ async def react_slash(interaction: discord.Interaction, message_input: str, emoj
     await interaction.response.defer(ephemeral=True)
 
     if "/" in message_input:
-        try:
-            message_id = int(message_input.split("/")[-1])
-        except ValueError:
-            await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Invalid Message Link provided.", ephemeral=True)
-            return
+        message_id = int(message_input.split("/")[-1])
     else:
         try:
             message_id = int(message_input)
@@ -389,12 +344,11 @@ async def reply_as_bot(interaction: discord.Interaction, message: discord.Messag
         )
 
         async def on_submit(self, modal_interaction: discord.Interaction):
-            await modal_interaction.response.defer(ephemeral=True)
             try:
                 await message.reply(self.reply_text.value)
-                await modal_interaction.followup.send(f"{SUCCESSFUL_SPIN} Reply sent!", ephemeral=True)
-            except discord.HTTPException:
-                await modal_interaction.followup.send(
+                await modal_interaction.response.send_message(f"{SUCCESSFUL_SPIN} Reply sent!", ephemeral=True)
+            except discord.Forbidden:
+                await modal_interaction.response.send_message(
                     f"{UNSUCCESSFUL_SPIN} I don't have permission to reply in that channel.", ephemeral=True)
 
     await interaction.response.send_modal(ReplyModal())
@@ -410,11 +364,7 @@ async def reply_slash(interaction: discord.Interaction, message_input: str, resp
     await interaction.response.defer(ephemeral=True)
 
     if "/" in message_input:
-        try:
-            message_id = int(message_input.split("/")[-1])
-        except ValueError:
-            await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} Invalid Message Link provided.", ephemeral=True)
-            return
+        message_id = int(message_input.split("/")[-1])
     else:
         try:
             message_id = int(message_input)
@@ -474,8 +424,6 @@ async def on_message(message: discord.Message):
                 embed.add_field(name="Attachments", value=attachment_urls, inline=False)
 
             await log_channel.send(embed=embed)
-
-    await bot.process_commands(message)
 
 
 @bot.event
@@ -697,11 +645,13 @@ class BulkConfirmView(discord.ui.View):
         self.reason = reason
         self.author_id = author_id
 
+        # Red primary action button
         button_label = f"{action_type.capitalize()} All"
         self.confirm_button = discord.ui.Button(label=button_label, style=discord.ButtonStyle.red)
         self.confirm_button.callback = self.confirm_callback
         self.add_item(self.confirm_button)
 
+        # Grey secondary cancel button
         self.cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
         self.cancel_button.callback = self.cancel_callback
         self.add_item(self.cancel_button)
@@ -719,6 +669,7 @@ class BulkConfirmView(discord.ui.View):
         for item in self.children:
             item.disabled = True
 
+        # Immediately respond to prevent "bot is thinking" timeouts on large lists
         processing_embed = discord.Embed(
             title=f"⏳ Processing Bulk {self.action_type.capitalize()}...",
             description=f"Executing bulk action on **{len(self.user_ids)}** user(s). Please wait...",
@@ -820,6 +771,7 @@ class BulkConfirmView(discord.ui.View):
                 except Exception:
                     failed.append(str(uid))
 
+        # Update the original ephemeral embed upon completion
         result_embed = discord.Embed(
             title=f"Bulk {self.action_type.capitalize()} Executed — {interaction.guild.name}",
             color=discord.Color.from_rgb(255, 255, 255),
@@ -842,6 +794,7 @@ class BulkConfirmView(discord.ui.View):
         result_embed.set_footer(text="Action completed.")
         await interaction.edit_original_response(embed=result_embed, view=self)
 
+        # Public channel message containing targeted user mentions
         public_embed = discord.Embed(
             title=f"✅ Bulk {self.action_type.capitalize()} Completed",
             description=f"Successfully executed **bulk {self.action_type}** on **{len(successful)}** user(s).",
@@ -991,7 +944,7 @@ async def bulkwarn(interaction: discord.Interaction, users: str, reason: str):
     embed.add_field(name="Reason", value=f"` {reason} `", inline=False)
     embed.set_footer(text="Ensure bot role is positioned higher than target members.")
 
-    view =BulkConfirmView("Warn", user_ids, reason=reason, author_id=interaction.user.id)
+    view = BulkConfirmView("Warn", user_ids, reason=reason, author_id=interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
@@ -1020,7 +973,6 @@ async def mute(interaction: discord.Interaction, member: discord.Member, duratio
         )
         return
 
-    await interaction.response.defer()
     delta = timedelta(seconds=seconds)
 
     dm_embed = discord.Embed(
@@ -1045,7 +997,7 @@ async def mute(interaction: discord.Interaction, member: discord.Member, duratio
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
                          icon_url=interaction.user.display_avatar.url)
-        await interaction.followup.send(embed=embed)
+        await interaction.response.send_message(embed=embed)
         await log_action(
             interaction.guild,
             "Manual Mute Executed",
@@ -1053,7 +1005,8 @@ async def mute(interaction: discord.Interaction, member: discord.Member, duratio
             discord.Color.gold()
         )
     except discord.Forbidden:
-        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} I lack permission to mute this member.", ephemeral=True)
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I lack permission to mute this member.",
+                                                ephemeral=True)
 
 
 @bot.tree.command(name="unmute", description="Unmute (remove timeout) a member manually")
@@ -1062,8 +1015,6 @@ async def unmute(interaction: discord.Interaction, member: discord.Member, reaso
     if member.bot:
         await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot unmute bots.", ephemeral=True)
         return
-
-    await interaction.response.defer()
 
     dm_embed = discord.Embed(
         title=f"🔊 Unmuted in {interaction.guild.name}",
@@ -1087,12 +1038,13 @@ async def unmute(interaction: discord.Interaction, member: discord.Member, reaso
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
                          icon_url=interaction.user.display_avatar.url)
-        await interaction.followup.send(embed=embed)
+        await interaction.response.send_message(embed=embed)
         await log_action(interaction.guild, "Manual Unmute Executed",
                          f"**Selected User:** {member.mention}\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
                          discord.Color.green())
     except discord.Forbidden:
-        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} I lack permission to unmute this member.", ephemeral=True)
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I lack permission to unmute this member.",
+                                                ephemeral=True)
 
 
 @bot.tree.command(name="ban", description="Ban a user manually")
@@ -1101,8 +1053,6 @@ async def ban(interaction: discord.Interaction, member: discord.Member, reason: 
     if member.bot:
         await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot ban bots.", ephemeral=True)
         return
-
-    await interaction.response.defer()
 
     dm_embed = discord.Embed(
         title=f"🔨 Banned from {interaction.guild.name}",
@@ -1126,12 +1076,13 @@ async def ban(interaction: discord.Interaction, member: discord.Member, reason: 
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
                          icon_url=interaction.user.display_avatar.url)
-        await interaction.followup.send(embed=embed)
+        await interaction.response.send_message(embed=embed)
         await log_action(interaction.guild, "Manual Ban Executed",
                          f"**Selected User:** {member.mention} ({member.id})\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
                          discord.Color.red())
     except discord.Forbidden:
-        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} I lack permission to ban this member.", ephemeral=True)
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I lack permission to ban this member.",
+                                                ephemeral=True)
 
 
 @bot.tree.command(name="unban", description="Unban a user manually by ID")
@@ -1142,7 +1093,6 @@ async def unban(interaction: discord.Interaction, user_id: str, reason: str = "N
                                                 ephemeral=True)
         return
 
-    await interaction.response.defer()
     uid = int(user_id)
     try:
         user = await bot.fetch_user(uid)
@@ -1167,16 +1117,16 @@ async def unban(interaction: discord.Interaction, user_id: str, reason: str = "N
         embed.add_field(name="Reason", value=reason, inline=False)
         embed.set_footer(text=f"Moderator: {interaction.user.display_name}",
                          icon_url=interaction.user.display_avatar.url)
-        await interaction.followup.send(embed=embed)
+        await interaction.response.send_message(embed=embed)
         await log_action(interaction.guild, "Manual Unban Executed",
                          f"**Selected User:** {user.mention} ({user.id})\n**Reason:** {reason}\n**Moderator:** {interaction.user.mention}",
                          discord.Color.green())
     except discord.NotFound:
-        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} User ID not found or not currently banned.",
-                                        ephemeral=True)
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} User ID not found or not currently banned.",
+                                                ephemeral=True)
     except discord.Forbidden:
-        await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} I lack permission to unban users.",
-                                        ephemeral=True)
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I lack permission to unban users.",
+                                                ephemeral=True)
 
 
 # --- Speak / Say Commands ---
@@ -1184,46 +1134,29 @@ async def unban(interaction: discord.Interaction, user_id: str, reason: str = "N
 @bot.tree.command(name="say", description="Make the bot say a message in a specified channel")
 @app_commands.checks.has_permissions(manage_messages=True)
 async def say(interaction: discord.Interaction, message: str, channel: discord.TextChannel = None):
-    await interaction.response.defer(ephemeral=True)
     target_channel = channel or interaction.channel
     try:
         await target_channel.send(message)
-        await interaction.followup.send(
-            f"{SUCCESSFUL_SPIN} Message sent to {target_channel.mention}!",
-            ephemeral=True
-        )
+        await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Message sent to {target_channel.mention}!",
+                                                ephemeral=True)
     except discord.Forbidden:
-        await interaction.followup.send(
-            f"{UNSUCCESSFUL_SPIN} I don't have permission to view or send messages in {target_channel.mention}.",
-            ephemeral=True
-        )
-    except discord.HTTPException as e:
-        await interaction.followup.send(
-            f"{UNSUCCESSFUL_SPIN} Failed to send message: {e}",
-            ephemeral=True
-        )
+        await interaction.response.send_message(
+            f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages in {target_channel.mention}.",
+            ephemeral=True)
 
 
 @bot.tree.command(name="speak", description="Make the bot say a message in the current channel")
 @app_commands.checks.has_permissions(manage_messages=True)
 async def speak(interaction: discord.Interaction, message: str):
-    await interaction.response.defer(ephemeral=True)
     try:
         await interaction.channel.send(message)
-        await interaction.followup.send(f"{SUCCESSFUL_SPIN} Message sent!", ephemeral=True)
+        await interaction.response.send_message(f"{SUCCESSFUL_SPIN} Message sent!", ephemeral=True)
     except discord.Forbidden:
-        await interaction.followup.send(
-            f"{UNSUCCESSFUL_SPIN} I don't have permission to view or send messages in this channel.",
-            ephemeral=True
-        )
-    except discord.HTTPException as e:
-        await interaction.followup.send(
-            f"{UNSUCCESSFUL_SPIN} Failed to send message: {e}",
-            ephemeral=True
-        )
+        await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} I don't have permission to send messages here.",
+                                                ephemeral=True)
 
 
-# --- Advanced Custom Embed Builder & Presets ---
+# --- Advanced Custom Embed Builder & Presets (Fully Restored Options) ---
 
 class AdvancedEmbedModal(discord.ui.Modal, title="Advanced Embed Builder"):
     channel_input = discord.ui.TextInput(
@@ -1270,6 +1203,7 @@ class AdvancedEmbedModal(discord.ui.Modal, title="Advanced Embed Builder"):
                     if isinstance(found_ch, discord.TextChannel):
                         target_channel = found_ch
 
+            # Parse Title & URL
             title_val = self.title_and_url.value.strip()
             title_text = title_val
             title_link = None
@@ -1278,6 +1212,7 @@ class AdvancedEmbedModal(discord.ui.Modal, title="Advanced Embed Builder"):
                 title_text = parts[0].strip()
                 title_link = parts[1].strip() or None
 
+            # Parse Thumbnail & Color
             thumb_url = None
             embed_color = discord.Color.blue()
             tc_val = self.thumbnail_and_color.value.strip()
@@ -1300,6 +1235,7 @@ class AdvancedEmbedModal(discord.ui.Modal, title="Advanced Embed Builder"):
                     except ValueError:
                         pass
 
+            # Parse Footer & Preset Name
             footer_text = None
             preset_name = None
             fp_val = self.footer_and_preset.value.strip()
@@ -1311,6 +1247,7 @@ class AdvancedEmbedModal(discord.ui.Modal, title="Advanced Embed Builder"):
                 else:
                     footer_text = fp_val
 
+            # Build Embed
             embed = discord.Embed(
                 title=title_text,
                 url=title_link,
@@ -1323,6 +1260,7 @@ class AdvancedEmbedModal(discord.ui.Modal, title="Advanced Embed Builder"):
             if footer_text:
                 embed.set_footer(text=footer_text)
 
+            # Optional: Save preset logic safely
             if preset_name:
                 try:
                     save_preset(preset_name, {
@@ -1379,13 +1317,16 @@ class GiveawayButton(discord.ui.View):
             self.entries.add(interaction.user.id)
             await interaction.response.send_message("You entered the giveaway!", ephemeral=True)
 
-            dm_embed = discord.Embed(
-                title="🎉 Giveaway Entry Confirmed!",
-                description=f"You have successfully entered the giveaway for **{prize_name}** in **{interaction.guild.name}**!",
-                color=discord.Color.green(),
-                timestamp=discord.utils.utcnow()
-            )
-            await send_user_dm(interaction.user, dm_embed)
+            try:
+                dm_embed = discord.Embed(
+                    title="🎉 Giveaway Entry Confirmed!",
+                    description=f"You have successfully entered the giveaway for **{prize_name}** in **{interaction.guild.name}**!",
+                    color=discord.Color.green(),
+                    timestamp=discord.utils.utcnow()
+                )
+                await send_user_dm(interaction.user, dm_embed)
+            except discord.Forbidden:
+                pass
 
 
 class GiveawayModal(discord.ui.Modal, title="Create a Giveaway"):
@@ -1535,13 +1476,12 @@ async def damage(interaction: discord.Interaction, member: discord.Member, point
                                                 ephemeral=True)
         return
 
-    await interaction.response.defer()
     pts_to_add = abs(points)
     current_damage, punishment = await apply_damage_and_punish(interaction.guild, member, pts_to_add, reason,
                                                                interaction.user)
 
     embed = create_damage_embed("add", member, pts_to_add, current_damage, punishment, reason, interaction.user)
-    await interaction.followup.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
 
 # --- Remove Damage Commands ---
@@ -1555,13 +1495,12 @@ async def removedamage(interaction: discord.Interaction, member: discord.Member,
                                                 ephemeral=True)
         return
 
-    await interaction.response.defer()
     pts_to_remove = -abs(points)
     current_damage, punishment = await apply_damage_and_punish(interaction.guild, member, pts_to_remove, reason,
                                                                interaction.user)
 
     embed = create_damage_embed("remove", member, abs(points), current_damage, punishment, reason, interaction.user)
-    await interaction.followup.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
 
 # --- Damage Query & Warning Commands ---
@@ -1583,7 +1522,6 @@ async def warn(interaction: discord.Interaction, member: discord.Member, reason:
         await interaction.response.send_message(f"{UNSUCCESSFUL_SPIN} You cannot warn bots.", ephemeral=True)
         return
 
-    await interaction.response.defer()
     key = (interaction.guild_id, member.id)
     if key not in user_warnings:
         user_warnings[key] = []
@@ -1593,7 +1531,7 @@ async def warn(interaction: discord.Interaction, member: discord.Member, reason:
 
     dm_embed = discord.Embed(
         title=f"⚠️ Warning Received in {interaction.guild.name}",
-        description="You have received an official warning.",
+        description=f"You have received an official warning.",
         color=discord.Color.orange(),
         timestamp=discord.utils.utcnow()
     )
@@ -1611,7 +1549,7 @@ async def warn(interaction: discord.Interaction, member: discord.Member, reason:
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.set_footer(text=f"Moderator: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
 
-    await interaction.followup.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
     await log_action(
         interaction.guild,
         "User Warned",
@@ -1643,7 +1581,6 @@ async def warnings(interaction: discord.Interaction, member: discord.Member):
 @bot.tree.command(name="clearwarnings", description="Reset warnings and damage points for a user")
 @app_commands.checks.has_permissions(administrator=True)
 async def clearwarnings(interaction: discord.Interaction, member: discord.Member):
-    await interaction.response.defer()
     key = (interaction.guild_id, member.id)
     user_damage.pop(key, None)
     user_warnings.pop(key, None)
@@ -1664,7 +1601,7 @@ async def clearwarnings(interaction: discord.Interaction, member: discord.Member
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.set_footer(text=f"Cleared by: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
 
-    await interaction.followup.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
     await log_action(interaction.guild, "Warnings Cleared",
                      f"**Selected User:** {member.mention}\n**Cleared By:** {interaction.user.mention}",
                      discord.Color.green())
@@ -1810,12 +1747,15 @@ async def apply_role_rules(member: discord.Member, reason: str = "RoleManage rul
     current = {r.id for r in member.roles}
     desired = {}  # role_id -> True (should have) / False (should not have)
 
+    # 1) "give" rules that are no longer met take the role back (if auto_remove is on)
     for rule in rules:
         if rule["action"] == "give" and rule.get("auto_remove", True) and not rule_condition_met(current, rule):
             desired[rule["then_role"]] = False
+    # 2) "give" rules that are met hand the role out (overrides step 1)
     for rule in rules:
         if rule["action"] == "give" and rule_condition_met(current, rule):
             desired[rule["then_role"]] = True
+    # 3) "remove" rules that are met always win
     for rule in rules:
         if rule["action"] == "remove" and rule_condition_met(current, rule):
             desired[rule["then_role"]] = False
@@ -1844,6 +1784,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     if not role_rules.get(after.guild.id):
         return
 
+    # Loop guard: stops contradictory rules from flipping a role back and forth forever
     key = (after.guild.id, after.id)
     now = time.time()
     stamps = [t for t in _role_eval_times.get(key, []) if now - t < 30]
@@ -1888,8 +1829,8 @@ rolemanage_group = app_commands.Group(
     ]
 )
 async def rolemanage_add(interaction: discord.Interaction, if_roles: str, then_role: discord.Role,
-                         action: app_commands.Choice[str] = None, match: app_commands.Choice[str] = None,
-                         unless_roles: str = None, auto_remove: bool = True):
+                        action: app_commands.Choice[str] = None, match: app_commands.Choice[str] = None,
+                        unless_roles: str = None, auto_remove: bool = True):
     guild = interaction.guild
     action_value = action.value if action else "give"
     match_value = match.value if match else "all"
@@ -2032,7 +1973,7 @@ async def rolemanage_sync(interaction: discord.Interaction):
             if n:
                 changed_members += 1
                 total_changes += n
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.5)  # stay well under Discord's rate limits
         except (discord.Forbidden, discord.HTTPException):
             failed += 1
 
@@ -2186,33 +2127,4 @@ async def banner(interaction: discord.Interaction, user: discord.User = None):
         await interaction.followup.send(f"{UNSUCCESSFUL_SPIN} **{name}** doesn't have a banner.")
 
 
-# --- Resilient Startup Loop (Prevents Render "Exited with status 1" on Cloudflare Rate-Limits) ---
-
-async def main():
-    if not TOKEN:
-        print("ERROR: DISCORD_TOKEN environment variable is missing in Render!")
-        while True:
-            await asyncio.sleep(3600)
-
-    while True:
-        try:
-            async with bot:
-                await bot.start(TOKEN)
-        except discord.PrivilegedIntentsRequired:
-            print("ERROR: Enable 'Server Members Intent' in the Discord Developer Portal!")
-            while True:
-                await asyncio.sleep(3600)
-        except discord.LoginFailure:
-            print("ERROR: Invalid DISCORD_TOKEN provided!")
-            while True:
-                await asyncio.sleep(3600)
-        except discord.HTTPException as e:
-            print(f"Cloudflare / Discord rate limit on Render IP (Status {e.status}). Retrying in 60 seconds...")
-            await asyncio.sleep(60)
-        except Exception as e:
-            print(f"Unexpected error: {e}. Retrying in 30 seconds...")
-            await asyncio.sleep(30)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+bot.run(TOKEN)
